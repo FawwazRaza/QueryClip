@@ -28,3 +28,9 @@ Open your terminal and run:
 ```bash
 git clone https://github.com/FawwazRaza/QueryClip.git
 cd QueryClip
+
+### 2. Add Your Videos
+Put your .mp4 video files into the following folder:
+
+```bash
+QueryClip/data/videos/
