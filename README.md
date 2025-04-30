@@ -26,5 +26,5 @@ QueryClip is a smart chatbot that can understand and answer questions based on y
 Open your terminal and run:
 
 ```bash
-git clone https://github.com/FawwazRaza/QueryClip.git
+[git clone https://github.com/FawwazRaza/QueryClip.git](https://github.com/FawwazRaza/QueryClip.git)
 cd QueryClip
