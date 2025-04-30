@@ -39,7 +39,10 @@ if st.button("Get Answer") and query.strip():
         st.markdown("---")
         st.markdown("### Top 3 Relevant Chunks")
         for idx, chunk in enumerate(data["chunks"], 1):
-            with st.expander(f"Chunk {idx} (Start: {chunk['start_time']}s, End: {chunk['end_time']}s)"):
+            with st.expander(
+                f"Chunk {idx} (File: {chunk['file_name']}, Start: {chunk['start_time']}s, End: {chunk['end_time']}s)"
+                , expanded=False):
                 st.write(chunk["text"])
+
     else:
         st.error("Could not retrieve a response from the backend.")

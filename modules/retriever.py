@@ -41,6 +41,7 @@ class ChromaRetriever:
                 "text": text,
                 "start_time": meta.get("start_time"),
                 "end_time": meta.get("end_time"),
+                "file_name": meta.get("file_name"),
                 "similarity": 1 - distance  
             })
         return hits
@@ -65,5 +66,6 @@ if __name__ == "__main__":
     results = retriever_chain(query, k=5)
     for i, chunk in enumerate(results, 1):
         print(f"Chunk {i}:")
+        print(f"File Name: {chunk['file_name']}")
         print(f"Text: {chunk['text']}")
         print(f"Start: {chunk['start_time']}s, End: {chunk['end_time']}s, Similarity: {chunk['similarity']:.3f}\n")

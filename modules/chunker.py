@@ -58,7 +58,9 @@ def split_transcription_with_timestamps(transcription_data, chunk_size=500, chun
         chunks_with_timestamps.append({
             "text": chunk.strip(),
             "start_time": chunk_start_time,
-            "end_time": chunk_end_time
+            "end_time": chunk_end_time,
+            "file_name": file_name 
+
         })
     return chunks_with_timestamps
 
@@ -79,6 +81,7 @@ if __name__ == "__main__":
     for video in transcription_data:
         video_title = video["video"].replace(".mp4", "")
         transcription = video["transcription"]
+        file_name = video["video"] 
         chunks = split_transcription_with_timestamps(transcription)
 
         save_chunks_to_file(chunks, output_directory, video_title)

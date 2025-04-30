@@ -12,7 +12,10 @@ def get_chunks_data(chunks_dir):
             with open(file_path, "r", encoding="utf-8") as file:
                 data = json.load(file)
                 if isinstance(data, list):  # Ensure data is a list of chunks
-                    chunks_data.extend(data)
+                    for chunk in data:
+                        if "file_name" not in chunk:
+                            chunk["file_name"] = file_name.replace("_chunks.json", ".mp4")
+                        chunks_data.extend(data)
                 else:
                     print(f"Warning: File {file_name} does not contain a list.")
     return chunks_data
@@ -28,6 +31,7 @@ def main():
 
     if chunks_data:
         text_chunks = [chunk["text"] for chunk in chunks_data]
+        # file_names = [chunk["file_name"] for chunk in chunks_data]
         embeddings = create_embeddings(text_chunks)
         print(f"embeddings shape: {embeddings.shape}")
     else:

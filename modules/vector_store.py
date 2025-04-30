@@ -74,6 +74,7 @@ def main():
             "start_time": chunk.get("start_time"),
             "end_time": chunk.get("end_time"),
             "text": chunk.get("text"),
+            "file_name": chunk.get("file_name")
         }
         for chunk in chunks
     ]

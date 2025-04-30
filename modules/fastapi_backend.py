@@ -57,6 +57,34 @@ class QueryRequest(BaseModel):
     query: str
     chat_history: list = []
 
+# @app.post("/query")
+# async def query_endpoint(request: QueryRequest):
+#     TOP_K = 3
+#     retriever_chain = ChromaRetriever().as_retriever(search_kwargs={"k": TOP_K})
+#     top_chunks = retriever_chain(request.query, k=TOP_K)
+#     non_empty_chunks = [chunk for chunk in top_chunks if chunk["text"].strip()]
+#     if not non_empty_chunks:
+#         return JSONResponse(content={
+#             "answer": "Not found in the dataset.",
+#             "chunks": []
+#         })
+#     context = "\n\n".join(
+#         f"[{i+1}] {chunk['text']} (Start: {chunk['start_time']}s, End: {chunk['end_time']}s)"
+#         for i, chunk in enumerate(non_empty_chunks)
+#     )
+#     answer = get_llm_response(context, request.query, request.chat_history)
+#     chunk_payload = [
+#         {
+#             "text": chunk["text"],
+#             "start_time": chunk["start_time"],
+#             "end_time": chunk["end_time"]
+#         }
+#         for chunk in non_empty_chunks
+#     ]
+#     return JSONResponse(content={
+#         "answer": answer,
+#         "chunks": chunk_payload
+#     })
 @app.post("/query")
 async def query_endpoint(request: QueryRequest):
     TOP_K = 3
@@ -69,7 +97,7 @@ async def query_endpoint(request: QueryRequest):
             "chunks": []
         })
     context = "\n\n".join(
-        f"[{i+1}] {chunk['text']} (Start: {chunk['start_time']}s, End: {chunk['end_time']}s)"
+        f"[{i+1}] {chunk['text']} (File: {chunk['file_name']}, Start: {chunk['start_time']}s, End: {chunk['end_time']}s)"
         for i, chunk in enumerate(non_empty_chunks)
     )
     answer = get_llm_response(context, request.query, request.chat_history)
@@ -77,7 +105,8 @@ async def query_endpoint(request: QueryRequest):
         {
             "text": chunk["text"],
             "start_time": chunk["start_time"],
-            "end_time": chunk["end_time"]
+            "end_time": chunk["end_time"],
+            "file_name": chunk["file_name"]
         }
         for chunk in non_empty_chunks
     ]

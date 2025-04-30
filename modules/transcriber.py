@@ -20,7 +20,12 @@ def process_videos(video_directory, output_json_path):
             # Transcribe audio
             result = model.transcribe(audio_path)
             transcription = [
-                {"text": seg["text"], "start_time": seg["start"], "end_time": seg["end"]}
+                {
+                    "file_name": filename,
+                    "text": seg["text"],
+                    "start_time": seg["start"],
+                    "end_time": seg["end"]
+                }
                 for seg in result["segments"]
             ]
 
