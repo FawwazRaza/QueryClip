@@ -1,0 +1,33 @@
+# chromadb>=0.4.24
+# openai-whisper
+# tqdm
+# torch
+# sentence-transformers
+# huggingface-hub
+# langchain
+# langchain-community
+# ffmpeg-python>=0.2.0
+# pydub
+# groq>=0.3.0
+# python-dotenv>=1.0.0
+# pytube>=15.0.0
+# moviepy
+# transformers
+# numpy
+# openai>=1.30.1
+# langchain-huggingface>=0.0.4
+# whisperx>=3.1.4
+# langchain_groq
+# moviepy==1.0.3
+# ffmpeg #choco install ffmpeg # for windows if not installed here 
+# llm
+
+chromadb>=0.4.24
+torch
+transformers
+sentence-transformers
+groq>=0.3.0
+python-dotenv>=1.0.0
+openai-whisper
+moviepy
+langchain-huggingface 
