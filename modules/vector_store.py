@@ -60,7 +60,11 @@ def main():
 
     client = chromadb.PersistentClient(path=chroma_dir)
     
-    if collection_name not in [c.name for c in client.list_collections()]:
+    # if collection_name not in [c.name for c in client.list_collections()]:
+    #     collection = client.create_collection(collection_name)
+    # else:
+    #     collection = client.get_collection(collection_name)
+    if collection_name not in client.list_collections():
         collection = client.create_collection(collection_name)
     else:
         collection = client.get_collection(collection_name)
