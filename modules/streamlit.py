@@ -1,6 +1,8 @@
 import streamlit as st
 import requests
+import os
 
+VIDEO_DIR = "../data/videos"
 API_URL = "http://localhost:8000/query"
 
 st.set_page_config(page_title="RAG Video Chatbot", page_icon=None)
@@ -36,11 +38,16 @@ if st.button("Get Answer") and query.strip():
 
         st.markdown("### Answer")
         st.markdown(data['answer'])
-        if "source" in data:
+        if "source" in data and data["source"].get("file_name"):
             src = data["source"]
-            st.markdown(
-                f"**Source:** `{src['file_name']}` | Start: `{src['start_time']}s` | End: `{src['end_time']}s`"
-            )
+            video_path = os.path.join(VIDEO_DIR, src['file_name'])
+            if os.path.exists(video_path):
+                st.markdown(
+                    f"**Source:** `{src['file_name']}` | Start: `{src['start_time']}s` | End: `{src['end_time']}s`"
+                )
+                st.video(video_path, start_time=int(src['start_time']))
+            else:
+                st.warning(f"Video file `{src['file_name']}` not found in `{VIDEO_DIR}`.")
         st.markdown("---")
         st.markdown("### Top 3 Relevant Chunks")
         for idx, chunk in enumerate(data["chunks"], 1):
