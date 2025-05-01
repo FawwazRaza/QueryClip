@@ -36,13 +36,20 @@ if st.button("Get Answer") and query.strip():
 
         st.markdown("### Answer")
         st.markdown(data['answer'])
+        if "source" in data:
+            src = data["source"]
+            st.markdown(
+                f"**Source:** `{src['file_name']}` | Start: `{src['start_time']}s` | End: `{src['end_time']}s`"
+            )
         st.markdown("---")
         st.markdown("### Top 3 Relevant Chunks")
         for idx, chunk in enumerate(data["chunks"], 1):
             with st.expander(
-                f"Chunk {idx} (File: {chunk['file_name']}, Start: {chunk['start_time']}s, End: {chunk['end_time']}s)"
-                , expanded=False):
+                f"Chunk {idx} (File: {chunk['file_name']}, Start: {chunk['start_time']}s, End: {chunk['end_time']}s, Similarity: {chunk.get('similarity', 'N/A'):.3f})",
+                expanded=False
+            ):
                 st.write(chunk["text"])
+
 
     else:
         st.error("Could not retrieve a response from the backend.")
