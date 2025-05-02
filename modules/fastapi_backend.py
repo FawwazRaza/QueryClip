@@ -10,6 +10,7 @@ import re
 load_dotenv()
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
+
 def get_llm_response(context, question, chat_history):
     client = Groq(api_key=GROQ_API_KEY)
     model_name = "deepseek-r1-distill-llama-70b"
