@@ -1,3 +1,5 @@
+# Remember -> I'm Working on it.
+
 # QueryClip - AI Chatbot with Video Understanding and RAG
 
 <p align="center">
