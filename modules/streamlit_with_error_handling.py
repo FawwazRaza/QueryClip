@@ -1,3 +1,5 @@
+
+
 import streamlit as st
 import requests
 import os
@@ -77,8 +79,8 @@ if query:
                 with st.chat_message("assistant"):
                     st.write(data['answer'])
                     
-                    # If there's source information (video reference), display the video
-                    if "source" in data and data["source"]:
+                    # Only display source information if it exists and the answer is not "Not found in the dataset"
+                    if "source" in data and data["source"] and "Not found in the dataset" not in data['answer']:
                         src = data["source"]
                         video_path = os.path.join(VIDEO_DIR, src['file_name'])
                         if os.path.exists(video_path):
@@ -89,7 +91,7 @@ if query:
                         else:
                             st.warning(f"Video file `{src['file_name']}` not found in `{VIDEO_DIR}`.")
                         
-                        # Show expandable section with relevant chunks
+                        # Show expandable section with relevant chunks only if they exist
                         if "chunks" in data and data["chunks"]:
                             with st.expander("View relevant video context"):
                                 for idx, chunk in enumerate(data["chunks"], 1):
@@ -103,7 +105,7 @@ if query:
                     "role": "assistant", 
                     "content": data['answer']
                 }
-                if "source" in data and data["source"]:
+                if "source" in data and data["source"] and "Not found in the dataset" not in data['answer']:
                     assistant_message["source"] = data["source"]
                 
                 st.session_state.chat_history.append(assistant_message)
@@ -124,4 +126,3 @@ if query:
             with st.chat_message("assistant"):
                 st.error(f"An error occurred: {str(e)}")
             st.session_state.chat_history.append({"role": "assistant", "content": f"An error occurred: {str(e)}"})
-

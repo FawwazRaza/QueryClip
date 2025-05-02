@@ -178,30 +178,39 @@ async def query_endpoint(request: QueryRequest):
             # Get response from LLM
             answer = get_llm_response(context, request.query, request.chat_history)
             
-            # Format chunks for response
-            chunk_payload = [
-                {
-                    "text": chunk["text"],
-                    "start_time": chunk["start_time"],
-                    "end_time": chunk["end_time"],
-                    "file_name": chunk["file_name"],
-                    "similarity": chunk.get("similarity", None)
+            # Check if the answer was found in the context
+            if "Not found in the dataset" in answer:
+                # If answer is not found, don't include source and chunks
+                return JSONResponse(content={
+                    "answer": answer,
+                    "source": None,
+                    "chunks": []
+                })
+            else:
+                # Format chunks for response
+                chunk_payload = [
+                    {
+                        "text": chunk["text"],
+                        "start_time": chunk["start_time"],
+                        "end_time": chunk["end_time"],
+                        "file_name": chunk["file_name"],
+                        "similarity": chunk.get("similarity", None)
+                    }
+                    for chunk in non_empty_chunks
+                ]
+                
+                # Format source info
+                source_info = {
+                    "file_name": top_chunk["file_name"],
+                    "start_time": top_chunk["start_time"],
+                    "end_time": top_chunk["end_time"]
                 }
-                for chunk in non_empty_chunks
-            ]
-            
-            # Format source info
-            source_info = {
-                "file_name": top_chunk["file_name"],
-                "start_time": top_chunk["start_time"],
-                "end_time": top_chunk["end_time"]
-            }
-            
-            return JSONResponse(content={
-                "answer": answer,
-                "source": source_info,
-                "chunks": chunk_payload
-            })
+                
+                return JSONResponse(content={
+                    "answer": answer,
+                    "source": source_info,
+                    "chunks": chunk_payload
+                })
         else:
             # For general queries
             answer = get_general_response(request.query, request.chat_history)
