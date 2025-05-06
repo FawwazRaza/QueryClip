@@ -10,10 +10,17 @@ import sys
 import re
 import asyncio
 import json
+from fastapi.responses import FileResponse
+from pathlib import Path
+
 
 # Import your existing modules
 from retriever import ChromaRetriever
 from groq import Groq
+
+
+VIDEO_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data/videos")
+os.makedirs(VIDEO_DIR, exist_ok=True)
 
 # Load environment variables
 load_dotenv()
@@ -300,6 +307,15 @@ async def stream_greeting_response(query, chat_history=""):
     except Exception as e:
         print(f"Error in greeting streaming: {str(e)}")
         yield f"data: {json.dumps({'error': str(e)})}\n\n"
+
+@app.get("/videos/{video_filename}")
+async def get_video(video_filename: str):
+    video_path = os.path.join(VIDEO_DIR, video_filename)
+    
+    if not os.path.exists(video_path):
+        raise HTTPException(status_code=404, detail=f"Video {video_filename} not found")
+    
+    return FileResponse(video_path, media_type="video/mp4")
 
 @app.get("/")
 async def health_check():

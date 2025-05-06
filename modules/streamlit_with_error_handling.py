@@ -6,7 +6,31 @@ import json
 from typing import Iterator
 import sseclient
 
-VIDEO_DIR = "../data/videos"
+# VIDEO_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data/videos")
+# os.makedirs(VIDEO_DIR, exist_ok=True)
+
+
+# def display_video_from_backend(video_filename, start_time=0):
+#     video_url = f"{NGROK_URL}/videos/{video_filename}"
+    
+#     # Check if video exists on backend
+#     try:
+#         # Using HEAD request to check if video exists without downloading
+#         response = requests.head(video_url, timeout=5)
+#         if response.status_code == 200:
+#             # Use st.video with the URL
+#             st.video(video_url, start_time=int(float(start_time)))
+#         else:
+#             st.warning(f"Video {video_filename} not found on backend server.")
+#     except Exception as e:
+#         st.error(f"Error accessing video: {str(e)}")
+
+
+def get_github_video_url(repo_owner, repo_name, path_to_video):
+    """Generate a URL for a video stored in a public GitHub repo"""
+    return f"https://raw.githubusercontent.com/{repo_owner}/{repo_name}/main/{path_to_video}"
+
+
 
 NGROK_URL = st.secrets.get("NGROK_URL", os.getenv("NGROK_URL", ""))
 
@@ -113,7 +137,8 @@ for message in st.session_state.chat_history:
                         f"**Source:** `{src['file_name']}` | Time: `{src['start_time']}s - {src['end_time']}s`"
                     )
                     try:
-                        st.video(video_path, start_time=int(float(src['start_time'])))
+                        video_url = get_github_video_url('FawwazRaza', 'QueryClip', f"data/videos/{src['file_name']}")
+                        st.video(video_url, start_time=int(float(src['start_time'])))
                     except Exception as e:
                         st.error(f"Error playing video: {str(e)}")
                 else:
@@ -283,7 +308,8 @@ if query:
                                             f"**Source:** `{src['file_name']}` | Time: `{src['start_time']}s - {src['end_time']}s`"
                                         )
                                         try:
-                                            st.video(video_path, start_time=int(float(src['start_time'])))
+                                            video_url = get_github_video_url('FawwazRaza', 'QueryClip', f"data/videos/{src['file_name']}")
+                                            st.video(video_url, start_time=int(float(src['start_time'])))
                                         except Exception as e:
                                             st.error(f"Error playing video: {str(e)}")
                                     else:
@@ -377,7 +403,8 @@ if query:
                                     f"**Source:** `{src['file_name']}` | Time: `{src['start_time']}s - {src['end_time']}s`"
                                 )
                                 try:
-                                    st.video(video_path, start_time=int(float(src['start_time'])))
+                                    video_url = get_github_video_url('FawwazRaza', 'QueryClip', f"data/videos/{src['file_name']}")
+                                    st.video(video_url, start_time=int(float(src['start_time'])))
                                 except Exception as e:
                                     st.error(f"Error playing video: {str(e)}")
                             else:

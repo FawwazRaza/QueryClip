@@ -1,46 +1,9 @@
-# import streamlit as st
-# import requests
-# import os
-# import json
-# from typing import Iterator
-# import time
-
-# # Set Streamlit page configuration
-# st.set_page_config(
-#     page_title="RAG Video Chatbot",
-#     page_icon="🎥",
-#     layout="wide",
-#     initial_sidebar_state="expanded"
-# )
-
-# # Default API URL (will be overridden if environment variable is set)
-# API_URL = os.getenv("BACKEND_API_URL", "https://your-ngrok-url-here.ngrok-free.app/query")
-# HEALTH_CHECK_URL = API_URL.replace('/query', '/')
-
-# # Function to check if the API is available
-# def is_api_available():
-#     try:
-#         response = requests.get(HEALTH_CHECK_URL, timeout=5)
-#         return response.status_code == 200
-#     except:
-#         return False
-
-# # Function to handle API errors
-# def handle_api_error(message="An error occurred"):
-#     st.error(f" {message}")
-#     st.info("Please check if the backend server is running correctly.")
-#     st.markdown("""
-#     For local development:
-#     1. Ensure your GROQ API key is set in the `.env` file
-#     2. Run the backend with `uvicorn fastapi_backend:app --host 0.0.0.0 --port 8000`
-#     3. Set up Ngrok to expose your backend
-#     """)
 import streamlit as st
 import requests
 import os
 import json
-from typing import Iterator
 import time
+from typing import Iterator
 
 # Set Streamlit page configuration
 st.set_page_config(
@@ -51,7 +14,6 @@ st.set_page_config(
 )
 
 # Get the API URL from Streamlit secrets or environment variables
-# This is the critical part for Streamlit Cloud deployment
 try:
     # First try to get from Streamlit secrets (for Streamlit Cloud)
     NGROK_URL = st.secrets.get("NGROK_URL", "")
@@ -68,10 +30,22 @@ if not NGROK_URL and os.path.exists("ngrok_url.txt"):
 if NGROK_URL:
     API_URL = f"{NGROK_URL}/query"
     HEALTH_CHECK_URL = f"{NGROK_URL}/"
+    VIDEO_BASE_URL = f"{NGROK_URL}/videos"  # URL for accessing videos from backend
 else:
     # Fallback to local development URL
     API_URL = os.getenv("BACKEND_API_URL", "http://localhost:8000/query")
     HEALTH_CHECK_URL = API_URL.replace('/query', '/')
+    VIDEO_BASE_URL = "http://localhost:8000/videos"
+
+# GitHub Video Repository Configuration
+# Update these with your actual GitHub username and repository name
+GITHUB_REPO_OWNER = "your-username"  # Replace with your GitHub username
+GITHUB_REPO_NAME = "your-repo"       # Replace with your repository name
+GITHUB_VIDEO_PATH = "videos"         # Path to videos folder in your repository
+
+def get_github_video_url(filename):
+    """Generate a URL for a video stored in a public GitHub repository"""
+    return f"https://raw.githubusercontent.com/{GITHUB_REPO_OWNER}/{GITHUB_REPO_NAME}/main/{GITHUB_VIDEO_PATH}/{filename}"
 
 # Function to check if the API is available
 def is_api_available():
@@ -86,12 +60,43 @@ def handle_api_error(message="An error occurred"):
     st.error(f" {message}")
     st.info("Please check if the backend server is running correctly.")
     st.markdown("""
-    For local development:
-    1. Ensure your GROQ API key is set in the `.env` file
-    2. Run the backend with `uvicorn fastapi_backend:app --host 0.0.0.0 --port 8000`
-    3. Set up Ngrok to expose your backend
+    If this is your first time running the app, please check:
+    1. Is the backend server running?
+    2. Have you set your GROQ API key in the `.env` file?
+    3. Are there any videos in your GitHub repository?
     """)
     
+    # Show the URL we're trying to connect to for debugging
+    st.markdown(f"Trying to connect to: `{API_URL}`")
+
+def display_video(video_filename, start_time=0):
+    """Display video from GitHub repository or backend server"""
+    
+    # For Streamlit Cloud: Use GitHub hosted videos
+    video_url = get_github_video_url(video_filename)
+    
+    try:
+        # Check if video exists by making a HEAD request
+        response = requests.head(video_url, timeout=5)
+        
+        if response.status_code == 200:
+            # Use st.video with the GitHub URL
+            st.video(video_url, start_time=int(float(start_time)))
+        else:
+            # Fallback to backend server (for local development)
+            backend_video_url = f"{VIDEO_BASE_URL}/{video_filename}"
+            
+            # Check if video exists on backend server
+            backend_response = requests.head(backend_video_url, timeout=5)
+            if backend_response.status_code == 200:
+                st.video(backend_video_url, start_time=int(float(start_time)))
+            else:
+                st.warning(f"Video {video_filename} not found in GitHub repository or backend server.")
+                st.info("Make sure the video is uploaded to your GitHub repository or backend server.")
+    except Exception as e:
+        st.error(f"Error accessing video: {str(e)}")
+        st.info(f"Attempted to access: {video_url}")
+
 # Setup sidebar
 with st.sidebar:
     st.image("https://www.groq.com/images/logo.svg", width=100)
@@ -102,10 +107,25 @@ with st.sidebar:
         st.markdown(f"Trying to connect to: {API_URL}")
     else:
         st.success("Connected to backend API")
+        
+        # Try to get list of available videos from backend
+        try:
+            response = requests.get(f"{NGROK_URL}/videos/list", timeout=5)
+            if response.status_code == 200:
+                videos = response.json().get("videos", [])
+                st.write(f" Found {len(videos)} videos in library")
+                if videos:
+                    with st.expander("Video Library"):
+                        for video in videos:
+                            st.write(f"- {video}")
+                else:
+                    st.warning("No videos found on the backend server.")
+        except:
+            st.info("Could not retrieve video list from backend.")
     
     # Information about videos
     st.write("This app queries video information from a backend API.")
-    st.info("Since Streamlit Cloud cannot access local files, videos should be stored on your backend server.")
+    st.info("Videos are stored on GitHub for Streamlit Cloud deployment.")
     
     with st.expander("Help & Information"):
         st.markdown("""
@@ -114,6 +134,9 @@ with st.sidebar:
         - **Ask about videos**: Query specific information from your video library
         - **General questions**: The bot can also answer general questions
         - **Commands**: Try typing "help" or "clear" to see special commands
+        
+        ### Adding videos:
+        Videos need to be added to your GitHub repository for Streamlit Cloud deployment.
         """)
     
     streaming_enabled = st.checkbox("Enable streaming", value=True, help="Show tokens as they're generated")
@@ -122,7 +145,6 @@ with st.sidebar:
         st.session_state.chat_history = []
         st.rerun()
 
-# Main content
 st.title(" Video Knowledge Chatbot")
 st.markdown("Ask me anything about your videos or any general questions!")
 
@@ -145,8 +167,8 @@ for message in st.session_state.chat_history:
                     f"**Source:** `{src['file_name']}` | Time: `{src['start_time']}s - {src['end_time']}s`"
                 )
                 
-                # Note: In Streamlit Cloud we can't directly access local videos
-                # You would need to serve videos from your backend or a cloud storage
+                # Display video from GitHub
+                display_video(src['file_name'], src['start_time'])
                 
                 if "chunks" in message and message["chunks"]:
                     with st.expander(" View Related Video Contexts"):
@@ -310,6 +332,9 @@ if query:
                                         f"**Source:** `{src['file_name']}` | Time: `{src['start_time']}s - {src['end_time']}s`"
                                     )
                                     
+                                    # Display video from GitHub
+                                    display_video(src['file_name'], src['start_time'])
+                                    
                                     if chunks_data:
                                         with st.expander(" View Related Video Contexts"):
                                             for idx, chunk in enumerate(chunks_data, 1):
@@ -358,6 +383,7 @@ if query:
                     })
             
             else:
+                # Non-streaming implementation
                 try:
                     with st.spinner("Getting answer..."):
                         response = requests.post(
@@ -396,6 +422,9 @@ if query:
                                 f"**Source:** `{src['file_name']}` | Time: `{src['start_time']}s - {src['end_time']}s`"
                             )
                             
+                            # Display video from GitHub
+                            display_video(src['file_name'], src['start_time'])
+                            
                             if chunks_data:
                                 with st.expander(" View Related Video Contexts"):
                                     for idx, chunk in enumerate(chunks_data, 1):
@@ -426,14 +455,14 @@ if query:
                         
                         st.session_state.chat_history.append({
                             "role": "assistant", 
-                            "content": f"  {error_msg}"
+                            "content": f" {error_msg}"
                         })
 
                 except Exception as e:
                     st.error(f"Error: {str(e)}")
                     st.session_state.chat_history.append({
                         "role": "assistant", 
-                        "content": f"  Error: {str(e)}"
+                        "content": f" Error: {str(e)}"
                     })
 
 # Display welcome message if no chat history
