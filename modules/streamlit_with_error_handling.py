@@ -177,8 +177,11 @@ def process_stream_manually(response):
                     
                     if 'token' in data:
                         token = data['token']
+                        if '<think>' in token.lower():  
+                            continue
                         complete_response += token
                         yield {'type': 'token', 'content': token}
+
                     
                     if 'end' in data and data['end']:
                         if 'complete_response' in data:

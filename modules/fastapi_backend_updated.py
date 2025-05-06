@@ -229,7 +229,8 @@ async def stream_greeting_response(query, chat_history=""):
         {
             "role": "system",
             "content": (
-                "You are a friendly video chatbot assistant. Respond warmly and briefly to greetings "
+                "You are a helpful video chatbot. Your job is to answer questions about videos and general topics."
+                " Introduce yourself as a video chatbot when asked who you are? Respond warmly and briefly to greetings "
                 "or questions about your capabilities. Be concise and helpful."
             ),
         },
