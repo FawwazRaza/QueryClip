@@ -102,13 +102,13 @@ Open two terminal windows:
 **Terminal 1 - Run the FastAPI backend:**
 ```bash
 cd modules
-uvicorn fastapi_backend:app --reload --port 8000
+python -m uvicorn fastapi_backend_updated:app --reload --host 0.0.0.0 --port 8000
 ```
 
-**Terminal 2 - Run the Streamlit frontend:**
+**Terminal 2 - Run the Streamlit frontend and backend:**
 ```bash
 cd modules
-streamlit run streamlit.py
+python run_app.py
 ```
 
 ### 7. Start Chatting!
