@@ -3,6 +3,8 @@ import requests
 import os
 import time
 import json
+from typing import Iterator
+import sseclient
 
 VIDEO_DIR = "../data/videos"
 API_URL = "http://localhost:8000/query"
@@ -36,7 +38,6 @@ st.set_page_config(
 with st.sidebar:
     st.image("https://www.groq.com/images/logo.svg", width=100)
     st.title("RAG Video Chatbot")
-    st.markdown("##### Powered by Groq LLM API")
     
     if not is_api_available():
         st.error(" Backend API is not available")
@@ -70,6 +71,8 @@ with st.sidebar:
         ### Adding videos:
         Place your video files in the `../data/videos` directory
         """)
+    
+    streaming_enabled = st.checkbox("Enable streaming", value=True, help="Show tokens as they're generated")
     
     if st.button("Clear Chat History"):
         st.session_state.chat_history = []
@@ -148,6 +151,49 @@ def process_special_commands(query):
     
     return False
 
+def process_stream_manually(response):
+    """Process the SSE stream manually without using sseclient."""
+    buffer = ""
+    source_info = None
+    chunks_info = None
+    complete_response = ""
+    
+    try:
+        for line in response.iter_lines():
+            if not line:
+                continue
+                
+            line = line.decode('utf-8')
+            if line.startswith('data: '):
+                data_str = line[6:]  
+                try:
+                    data = json.loads(data_str)
+                    
+                    if 'metadata' in data:
+                        metadata = data['metadata']
+                        source_info = metadata.get('source')
+                        chunks_info = metadata.get('chunks')
+                        continue
+                    
+                    if 'token' in data:
+                        token = data['token']
+                        complete_response += token
+                        yield {'type': 'token', 'content': token}
+                    
+                    if 'end' in data and data['end']:
+                        if 'complete_response' in data:
+                            complete_response = data['complete_response']
+                        yield {'type': 'complete', 'content': complete_response, 'source': source_info, 'chunks': chunks_info}
+                    
+                    if 'error' in data:
+                        yield {'type': 'error', 'content': f"Error: {data['error']}"}
+                        
+                except json.JSONDecodeError:
+                    yield {'type': 'error', 'content': f"Error decoding response: {data_str}"}
+                    
+    except Exception as e:
+        yield {'type': 'error', 'content': f"Error processing stream: {str(e)}"}
+
 query = st.chat_input("Type your message here...")
 
 if query:
@@ -163,41 +209,152 @@ if query:
             handle_api_error("Backend API is not available")
             st.session_state.chat_history.append({
                 "role": "assistant", 
-                "content": "⚠️ I'm having trouble connecting to the backend. Please check if the server is running."
+                "content": " I'm having trouble connecting to the backend. Please check if the server is running."
             })
             st.rerun()
 
-        with st.spinner("Thinking..."):
-            try:
-                response = requests.post(
-                    API_URL,
-                    json={
-                        "query": query,
-                        "chat_history": st.session_state.chat_history[:-1]  
-                    },
-                    timeout=30  
-                )
-                
-                if response.status_code == 200:
-                    data = response.json()
+        with st.chat_message("assistant", avatar="🤖") as message_container:
+            if streaming_enabled:
+                try:
+                    response_placeholder = st.empty()
+                    collected_tokens = ""
+                    source_data = None
+                    chunks_data = None
                     
-                    assistant_message = {
-                        "role": "assistant", 
-                        "content": data['answer']
-                    }
+                    with st.spinner("Connecting..."):
+                        response = requests.post(
+                            API_URL,
+                            json={
+                                "query": query,
+                                "chat_history": st.session_state.chat_history[:-1],
+                                "stream": True
+                            },
+                            stream=True,
+                            timeout=60,
+                            headers={'Accept': 'text/event-stream'} 
+                        )
                     
-                    if "source" in data and data["source"] and "Not found in the dataset" not in data['answer']:
-                        assistant_message["source"] = data["source"]
-                        if "chunks" in data and data["chunks"]:
-                            assistant_message["chunks"] = data["chunks"]
+                    if response.status_code == 200:
+                        stream_generator = process_stream_manually(response)
+                        for message in stream_generator:
+                            if message['type'] == 'token':
+                                collected_tokens += message['content']
+                                response_placeholder.markdown(collected_tokens + "▌")  
+                            
+                            elif message['type'] == 'complete':
+                                final_response = message['content']
+                                source_data = message.get('source')
+                                chunks_data = message.get('chunks')
+                                response_placeholder.markdown(final_response)  
+                                
+                                assistant_message = {
+                                    "role": "assistant", 
+                                    "content": final_response
+                                }
+                                
+                                if source_data and "Not found in the dataset" not in final_response:
+                                    assistant_message["source"] = source_data
+                                    if chunks_data:
+                                        assistant_message["chunks"] = chunks_data
+                                
+                                st.session_state.chat_history.append(assistant_message)
+                                
+                                if source_data and "Not found in the dataset" not in final_response:
+                                    src = source_data
+                                    video_path = os.path.join(VIDEO_DIR, src['file_name'])
+                                    if os.path.exists(video_path):
+                                        st.markdown(
+                                            f"**Source:** `{src['file_name']}` | Time: `{src['start_time']}s - {src['end_time']}s`"
+                                        )
+                                        try:
+                                            st.video(video_path, start_time=int(float(src['start_time'])))
+                                        except Exception as e:
+                                            st.error(f"Error playing video: {str(e)}")
+                                    else:
+                                        st.warning(f"Video file `{src['file_name']}` not found in `{VIDEO_DIR}`.")
+                                    
+                                    if chunks_data:
+                                        with st.expander(" View Related Video Contexts"):
+                                            for idx, chunk in enumerate(chunks_data, 1):
+                                                similarity = chunk.get('similarity', 0)
+                                                if similarity > 0.8:
+                                                    sim_color = "green"
+                                                elif similarity > 0.5:
+                                                    sim_color = "blue"
+                                                else:
+                                                    sim_color = "red"
+                                                    
+                                                st.markdown(f"##### Chunk {idx} - Relevance: :{sim_color}[{similarity:.2f}]")
+                                                st.markdown(f"*Source: {chunk['file_name']}, Time: {chunk['start_time']}s - {chunk['end_time']}s*")
+                                                st.markdown(f"```\n{chunk['text']}\n```")
+                                                st.markdown("---")
+                            
+                            elif message['type'] == 'error':
+                                st.error(message['content'])
+                                st.session_state.chat_history.append({
+                                    "role": "assistant", 
+                                    "content": message['content']
+                                })
                     
-                    st.session_state.chat_history.append(assistant_message)
-                    
-                    with st.chat_message("assistant", avatar="🤖"):
-                        st.write(data['answer'])
+                    else:
+                        error_msg = f"Server error: {response.status_code}"
+                        try:
+                            error_details = response.json()
+                            if "detail" in error_details:
+                                error_msg += f" - {error_details['detail']}"
+                        except:
+                            pass
                         
-                        if "source" in data and data["source"] and "Not found in the dataset" not in data['answer']:
-                            src = data["source"]
+                        st.error(error_msg)
+                        st.info("Please check the backend server logs for more information.")
+                        
+                        st.session_state.chat_history.append({
+                            "role": "assistant", 
+                            "content": f" {error_msg}"
+                        })
+                
+                except Exception as e:
+                    st.error(f"Error: {str(e)}")
+                    st.session_state.chat_history.append({
+                        "role": "assistant", 
+                        "content": f" Error: {str(e)}"
+                    })
+            
+            else:
+                try:
+                    with st.spinner("Getting answer..."):
+                        response = requests.post(
+                            API_URL,
+                            json={
+                                "query": query,
+                                "chat_history": st.session_state.chat_history[:-1],
+                                "stream": False
+                            },
+                            timeout=60
+                        )
+                    
+                    if response.status_code == 200:
+                        response_data = response.json()
+                        answer = response_data.get("answer", "No answer received")
+                        source_data = response_data.get("source")
+                        chunks_data = response_data.get("chunks", [])
+                        
+                        st.write(answer)
+                        
+                        assistant_message = {
+                            "role": "assistant", 
+                            "content": answer
+                        }
+                        
+                        if source_data and "Not found in the dataset" not in answer:
+                            assistant_message["source"] = source_data
+                            if chunks_data:
+                                assistant_message["chunks"] = chunks_data
+                        
+                        st.session_state.chat_history.append(assistant_message)
+                        
+                        if source_data and "Not found in the dataset" not in answer:
+                            src = source_data
                             video_path = os.path.join(VIDEO_DIR, src['file_name'])
                             if os.path.exists(video_path):
                                 st.markdown(
@@ -210,9 +367,9 @@ if query:
                             else:
                                 st.warning(f"Video file `{src['file_name']}` not found in `{VIDEO_DIR}`.")
                             
-                            if "chunks" in data and data["chunks"]:
+                            if chunks_data:
                                 with st.expander(" View Related Video Contexts"):
-                                    for idx, chunk in enumerate(data["chunks"], 1):
+                                    for idx, chunk in enumerate(chunks_data, 1):
                                         similarity = chunk.get('similarity', 0)
                                         if similarity > 0.8:
                                             sim_color = "green"
@@ -225,56 +382,37 @@ if query:
                                         st.markdown(f"*Source: {chunk['file_name']}, Time: {chunk['start_time']}s - {chunk['end_time']}s*")
                                         st.markdown(f"```\n{chunk['text']}\n```")
                                         st.markdown("---")
-                else:
-                    error_msg = f"Server error: {response.status_code}"
-                    try:
-                        error_details = response.json()
-                        if "detail" in error_details:
-                            error_msg += f" - {error_details['detail']}"
-                    except:
-                        pass
                     
-                    with st.chat_message("assistant", avatar="🤖"):
+                    else:
+                        error_msg = f"Server error: {response.status_code}"
+                        try:
+                            error_details = response.json()
+                            if "detail" in error_details:
+                                error_msg += f" - {error_details['detail']}"
+                        except:
+                            pass
+                        
                         st.error(error_msg)
                         st.info("Please check the backend server logs for more information.")
-                    
+                        
+                        st.session_state.chat_history.append({
+                            "role": "assistant", 
+                            "content": f"  {error_msg}"
+                        })
+
+                except Exception as e:
+                    st.error(f"Error: {str(e)}")
                     st.session_state.chat_history.append({
                         "role": "assistant", 
-                        "content": f" {error_msg}. Please try again."
+                        "content": f"  Error: {str(e)}"
                     })
-            
-            except requests.exceptions.ConnectionError:
-                handle_api_error("Cannot connect to the backend server")
-                st.session_state.chat_history.append({
-                    "role": "assistant", 
-                    "content": " Connection error. Cannot reach the backend server."
-                })
-            
-            except requests.exceptions.Timeout:
-                handle_api_error("Request timed out. The server might be overloaded.")
-                st.session_state.chat_history.append({
-                    "role": "assistant", 
-                    "content": " Request timed out. Please try again or ask a simpler question."
-                })
-            
-            except Exception as e:
-                with st.chat_message("assistant", avatar="🤖"):
-                    st.error(f"An unexpected error occurred: {str(e)}")
-                
-                st.session_state.chat_history.append({
-                    "role": "assistant", 
-                    "content": f" An unexpected error occurred: {str(e)}"
-                })
-                
-        st.rerun()
 
-st.markdown("---")
-st.markdown(
-    """
-    <div style="text-align: center; color: gray; font-size: 0.8em;">
-        RAG Video Chatbot | Powered by <a href="https://groq.com" target="_blank">Groq</a> | 
-        Built with <a href="https://streamlit.io" target="_blank">Streamlit</a>
-    </div>
-    """,
-    unsafe_allow_html=True
-)
+if not st.session_state.chat_history:
+    with st.chat_message("assistant", avatar="🤖"):
+        st.write("""
+         Welcome to the RAG Video Chatbot!
+        
+        I can help you find information from your video library. Try asking me questions about any video content you've added to the system.
+        
+        Type 'help' to see available commands.
+        """)
