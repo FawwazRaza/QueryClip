@@ -18,3 +18,5 @@ whisper
 sseclient
 httpx
 pyngrok
+
+
