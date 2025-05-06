@@ -1,7 +1,7 @@
 import os
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 from retriever import ChromaRetriever
 from groq import Groq
@@ -15,11 +15,56 @@ if not GROQ_API_KEY:
 
 app = FastAPI()
 
+class Route(BaseModel):
+    destination: str = Field(..., description="Destination to route to")
+
+def route_query(query: str) -> str:
+    
+    client = Groq(api_key=GROQ_API_KEY)
+    model_name = "qwen-qwq-32b" 
+
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You are a classification assistant. Your task is to classify a user query into exactly one of the following routes:\n"
+                "- 'DEFAULT': If the query is a greeting, farewell, or introduction about the chatbot. greetings like Hi, hello. Introduction like who are you? Introduce yourself? Why I use you etc choose this category\n"
+                "- 'UNSAFE': If the query includes offensive, illegal, sexual, violent, or otherwise unsafe content.\n"
+                "- 'Bot': For all queries not covered by the above categories.\n"
+                "Respond with ONLY ONE WORD: DEFAULT, UNSAFE, or Bot."
+                "You are a classification assistant. Respond with EXACTLY one word: DEFAULT, UNSAFE, or BOT.\n"
+                 "Do NOT explain, reason, or think aloud. Just respond with one of the three words ONLY — no punctuation, no extra words."
+
+            ),
+        },
+        {
+            "role": "user",
+            "content": f"Query: {query}\nRoute:",
+        },
+    ]
+
+    try:
+        chat_completion = client.chat.completions.create(
+            model=model_name,
+            messages=messages
+        )
+        classification = chat_completion.choices[0].message.content.strip().upper()
+        classification = re.sub(r"<THINK>.*?</THINK>", "", classification, flags=re.DOTALL).strip()
+        print(f"LLM classification: {classification}")
+
+        if classification not in {"DEFAULT", "UNSAFE", "BOT"}:
+            print(f"Unexpected LLM response: {classification}")
+            return "Bot" 
+        
+        return classification
+    except Exception as e:
+        print(f"Error classifying query: {str(e)}")
+        return "Bot"
+
 def get_llm_response(context, question, chat_history=""):
     client = Groq(api_key=GROQ_API_KEY)
     model_name = "deepseek-r1-distill-llama-70b"
 
-    # Format chat history
     history_str = ""
     if isinstance(chat_history, list):
         for msg in chat_history:
@@ -61,11 +106,10 @@ def get_llm_response(context, question, chat_history=""):
         print(f"Error in LLM response: {str(e)}")
         return "Sorry, I encountered an error processing your request."
 
-def get_general_response(query, chat_history=""):
+def get_greeting_response(query, chat_history=""):
     client = Groq(api_key=GROQ_API_KEY)
     model_name = "deepseek-r1-distill-llama-70b"
     
-    # Format chat history
     history_str = ""
     if isinstance(chat_history, list):
         for msg in chat_history:
@@ -80,17 +124,16 @@ def get_general_response(query, chat_history=""):
         {
             "role": "system",
             "content": (
-                "You are a helpful assistant for a video browsing platform. "
-                "The user is asking a general question not related to specific video content. "
-                "Provide a helpful, conversational response."
+                "You are a friendly video chatbot assistant. Respond warmly and briefly to greetings "
+                "or questions about your capabilities. Be concise and helpful."
             ),
         },
         {
             "role": "user",
             "content": (
                 f"Chat History:\n{history_str}\n"
-                f"User Question: {query}\n"
-                f"Please provide a helpful, conversational response:"
+                f"User Message: {query}\n"
+                f"Please respond to this greeting or introduction:"
             ),
         },
     ]
@@ -101,42 +144,12 @@ def get_general_response(query, chat_history=""):
             model=model_name,
         )
         answer = chat_completion.choices[0].message.content.strip()
+        answer = re.sub(r"<think>.*?</think>", "", answer, flags=re.DOTALL).strip()
         return answer
     except Exception as e:
-        print(f"Error in general response: {str(e)}")
-        return "Sorry, I encountered an error processing your request."
+        print(f"Error in greeting response: {str(e)}")
+        return "Hello! How can I help you with your video questions today?"
 
-def is_video_specific_query(query, chat_history=""):
-    client = Groq(api_key=GROQ_API_KEY)
-    model_name = "deepseek-r1-distill-llama-70b"
-    
-    messages = [
-        {
-            "role": "system",
-            "content": (
-                "You are a classifier that determines if a query is asking about specific video content or not. "
-                "Reply with ONLY 'yes' if the query is asking about information that might be in video content, "
-                "or 'no' if it's a general query, greeting, or not related to video content."
-            ),
-        },
-        {
-            "role": "user",
-            "content": f"Query: {query}\nIs this asking about specific video content? (yes/no)"
-        },
-    ]
-
-    try:
-        chat_completion = client.chat.completions.create(
-            messages=messages,
-            model=model_name,
-        )
-        answer = chat_completion.choices[0].message.content.strip().lower()
-        return "yes" in answer
-    except Exception as e:
-        print(f"Error in classifier: {str(e)}")
-        return True  # Default to retrieval on error
-
-# Add a health check endpoint
 @app.get("/")
 async def health_check():
     return {"status": "ok", "message": "API is running"}
@@ -148,46 +161,68 @@ class QueryRequest(BaseModel):
 @app.post("/query")
 async def query_endpoint(request: QueryRequest):
     try:
-        # Determine if query is about video content
-        is_video_query = is_video_specific_query(request.query)
+        route = route_query(request.query)
+        print(f"Query routed to: {route}")
         
-        # If it's a video query, use retrieval
-        if is_video_query:
-            # Get top chunks
+        if route == "DEFAULT":
+            answer = get_greeting_response(request.query, request.chat_history)
+            return JSONResponse(content={
+                "answer": answer,
+                "source": None,
+                "chunks": []
+            })
+        
+        elif route == "UNSAFE":
+            return JSONResponse(content={
+                "answer": "I'm sorry, but I cannot provide information or assistance with that request. Please ask a different question that I can help with.",
+                "source": None,
+                "chunks": []
+            })
+        
+        else:  
+            print("Processing via retriever chain...")
             TOP_K = 3
             retriever_chain = ChromaRetriever().as_retriever(search_kwargs={"k": TOP_K})
             top_chunks = retriever_chain(request.query, k=TOP_K)
-            non_empty_chunks = [chunk for chunk in top_chunks if chunk["text"].strip()]
+            
+            print(f"Retrieved {len(top_chunks)} chunks")
+            for i, chunk in enumerate(top_chunks):
+                print(f"Chunk {i+1} similarity: {chunk.get('similarity', 'N/A')}")
+            
+            non_empty_chunks = [chunk for chunk in top_chunks if chunk.get("text", "").strip()]
+            print(f"Non-empty chunks: {len(non_empty_chunks)}")
             
             if not non_empty_chunks:
+                print("No chunks found in database for this query")
                 return JSONResponse(content={
                     "answer": "Not found in the dataset.",
                     "source": None,
                     "chunks": []
                 })
             
-            # Get the top chunk based on similarity
             top_chunk = max(non_empty_chunks, key=lambda c: c.get("similarity", 0))
+            print(f"Top chunk from: {top_chunk.get('file_name', 'unknown')}")
             
-            # Create context from top chunk
+            combined_context = "\n\n".join([chunk["text"] for chunk in non_empty_chunks])
             context = (
-                f"{top_chunk['text']} "
-                f"(File: {top_chunk['file_name']}, Start: {top_chunk['start_time']}s, End: {top_chunk['end_time']}s)"
+                f"{combined_context}\n\n"
+                f"Most relevant source: (File: {top_chunk['file_name']}, "
+                f"Start: {top_chunk['start_time']}s, End: {top_chunk['end_time']}s)"
             )
             
-            # Get response from LLM
+            print("Sending context to LLM for answer generation...")
             answer = get_llm_response(context, request.query, request.chat_history)
             
-            # Check if the answer was found in the context
+            print(f"Generated answer: {answer[:100]}...")
+            
             if "Not found in the dataset" in answer:
-                # If answer is not found, don't include source and chunks
+                print("Answer not found in context")
                 return JSONResponse(content={
                     "answer": answer,
                     "source": None,
                     "chunks": []
                 })
             else:
-                # Format chunks for response
                 chunk_payload = [
                     {
                         "text": chunk["text"],
@@ -199,26 +234,18 @@ async def query_endpoint(request: QueryRequest):
                     for chunk in non_empty_chunks
                 ]
                 
-                # Format source info
                 source_info = {
                     "file_name": top_chunk["file_name"],
                     "start_time": top_chunk["start_time"],
                     "end_time": top_chunk["end_time"]
                 }
                 
+                print(f"Returning answer with source from {source_info['file_name']}")
                 return JSONResponse(content={
                     "answer": answer,
                     "source": source_info,
                     "chunks": chunk_payload
                 })
-        else:
-            # For general queries
-            answer = get_general_response(request.query, request.chat_history)
-            return JSONResponse(content={
-                "answer": answer,
-                "source": None,
-                "chunks": []
-            })
             
     except Exception as e:
         print(f"Error processing query: {str(e)}")

@@ -1,3 +1,4 @@
+
 import subprocess
 import sys
 import os
@@ -9,9 +10,8 @@ import platform
 def run_backend():
     print("Starting FastAPI backend server...")
     if platform.system() == "Windows":
-        # Windows version
         return subprocess.Popen(
-            ["python", "-m", "uvicorn", "fastapi_backend_updated:app", "--reload", "--host", "0.0.0.0", "--port", "8000"],
+            ["python", "-m", "uvicorn", "fastapi_backend:app", "--reload", "--host", "0.0.0.0", "--port", "8000"],
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
@@ -19,9 +19,8 @@ def run_backend():
             shell=True
         )
     else:
-        # Linux/Mac version
         return subprocess.Popen(
-            ["python", "-m", "uvicorn", "fastapi_backend_updated:app", "--reload", "--host", "0.0.0.0", "--port", "8000"],
+            ["python", "-m", "uvicorn", "fastapi_backend:app", "--reload", "--host", "0.0.0.0", "--port", "8000"],
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
@@ -31,7 +30,6 @@ def run_backend():
 def run_frontend():
     print("Starting Streamlit frontend...")
     if platform.system() == "Windows":
-        # Windows version
         return subprocess.Popen(
             ["streamlit", "run", "streamlit_with_error_handling.py"],
             stdout=subprocess.PIPE,
@@ -41,7 +39,6 @@ def run_frontend():
             shell=True
         )
     else:
-        # Linux/Mac version
         return subprocess.Popen(
             ["streamlit", "run", "streamlit_with_error_handling.py"],
             stdout=subprocess.PIPE,
@@ -59,19 +56,16 @@ def print_output(process, name):
             print(f"[{name}] {line.strip()}")
 
 def main():
-    # Make sure .env file exists
     if not os.path.exists(".env"):
         with open(".env", "w") as f:
             f.write("GROQ_API_KEY=your_groq_api_key_here\n")
         print("Created a .env file - please edit it to add your GROQ API key before proceeding.")
         return
 
-    # Start backend and frontend
     backend_process = run_backend()
     time.sleep(5)  # Wait for backend to start
     frontend_process = run_frontend()
     
-    # Create threads to print output from both processes
     backend_thread = threading.Thread(target=print_output, args=(backend_process, "BACKEND"))
     frontend_thread = threading.Thread(target=print_output, args=(frontend_process, "FRONTEND"))
     
@@ -87,19 +81,15 @@ def main():
     print("Press Ctrl+C to stop both servers")
     
     try:
-        # Keep the main thread alive
         while backend_process.poll() is None and frontend_process.poll() is None:
             time.sleep(1)
     except KeyboardInterrupt:
         print("\nShutting down servers...")
         
-        # Terminate processes
         if platform.system() == "Windows":
-            # Windows requires special handling
             backend_process.terminate()
             frontend_process.terminate()
         else:
-            # Unix-like systems
             backend_process.send_signal(signal.SIGTERM)
             frontend_process.send_signal(signal.SIGTERM)
         
