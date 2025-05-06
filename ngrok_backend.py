@@ -1,3 +1,39 @@
+
+# # Import your existing functions from fastapi_backend.py
+# # Including route_query, stream_llm_response, get_llm_response, etc.
+# # (keeping these the same as in your original file)
+
+# # Your existing endpoint definitions
+# @app.get("/")
+# async def health_check():
+#     return {"status": "ok", "message": "API is running"}
+
+# class QueryRequest(BaseModel):
+#     query: str
+#     chat_history: list = []
+#     stream: bool = False
+
+# @app.post("/query")
+# async def query_endpoint(request: QueryRequest):
+#     # Your existing query handling logic
+#     # (keeping this the same as in your original file)
+#     pass
+
+# # Function to start Ngrok tunnel
+# def start_ngrok():
+#     # Start ngrok tunnel to expose the API
+#     public_url = ngrok.connect(8000).public_url
+#     print(f"ngrok tunnel active at: {public_url}")
+#     with open("ngrok_url.txt", "w") as f:
+#         f.write(public_url)
+#     return public_url
+
+# if __name__ == "__main__":
+#     # Start Ngrok when this file is run directly
+#     ngrok_url = start_ngrok()
+#     # Run the FastAPI app
+#     uvicorn.run(app, host="0.0.0.0", port=8000)
+
 import os
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse, StreamingResponse

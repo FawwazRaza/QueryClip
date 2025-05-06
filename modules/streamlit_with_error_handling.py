@@ -7,8 +7,21 @@ from typing import Iterator
 import sseclient
 
 VIDEO_DIR = "../data/videos"
-API_URL = "http://localhost:8000/query"
-HEALTH_CHECK_URL = "http://localhost:8000/"
+
+NGROK_URL = st.secrets.get("NGROK_URL", os.getenv("NGROK_URL", ""))
+
+# If running locally and we have a saved URL, use that
+if not NGROK_URL and os.path.exists("ngrok_url.txt"):
+    with open("ngrok_url.txt", "r") as f:
+        NGROK_URL = f.read().strip()
+
+if not NGROK_URL:
+    st.error("No Ngrok URL found! The backend server is not accessible.")
+    st.info("You need to run ngrok_backend.py first and set the URL in Streamlit secrets.")
+    st.stop()
+
+API_URL = f"{NGROK_URL}/query"
+HEALTH_CHECK_URL = f"{NGROK_URL}/"
 
 def is_api_available():
     try:
