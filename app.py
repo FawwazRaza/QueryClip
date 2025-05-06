@@ -39,9 +39,9 @@ else:
 
 # GitHub Video Repository Configuration
 # Update these with your actual GitHub username and repository name
-GITHUB_REPO_OWNER = "your-username"  # Replace with your GitHub username
-GITHUB_REPO_NAME = "your-repo"       # Replace with your repository name
-GITHUB_VIDEO_PATH = "videos"         # Path to videos folder in your repository
+GITHUB_REPO_OWNER = "FawwazRaza"  # Replace with your GitHub username
+GITHUB_REPO_NAME = "QueryClip"       # Replace with your repository name
+GITHUB_VIDEO_PATH = "data/videos"         # Path to videos folder in your repository
 
 def get_github_video_url(filename):
     """Generate a URL for a video stored in a public GitHub repository"""
@@ -80,8 +80,7 @@ def display_video(video_filename, start_time=0):
         response = requests.head(video_url, timeout=5)
         
         if response.status_code == 200:
-            # Use st.video with the GitHub URL
-            st.video(video_url, start_time=int(float(start_time)))
+            st.video(video_url, start_time=int(float(src['start_time'])))
         else:
             # Fallback to backend server (for local development)
             backend_video_url = f"{VIDEO_BASE_URL}/{video_filename}"

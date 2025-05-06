@@ -19,8 +19,8 @@ from retriever import ChromaRetriever
 from groq import Groq
 
 
-VIDEO_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data/videos")
-os.makedirs(VIDEO_DIR, exist_ok=True)
+# VIDEO_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data/videos")
+# os.makedirs(VIDEO_DIR, exist_ok=True)
 
 # Load environment variables
 load_dotenv()
@@ -308,9 +308,17 @@ async def stream_greeting_response(query, chat_history=""):
         print(f"Error in greeting streaming: {str(e)}")
         yield f"data: {json.dumps({'error': str(e)})}\n\n"
 
+GITHUB_REPO_OWNER = "FawwazRaza"  # Replace with your GitHub username
+GITHUB_REPO_NAME = "QueryClip"       # Replace with your repository name
+GITHUB_VIDEO_PATH = "data/videos"         # Path to videos folder in your repository
+
+def get_github_video_url(filename):
+    """Generate a URL for a video stored in a public GitHub repository"""
+    return f"https://raw.githubusercontent.com/{GITHUB_REPO_OWNER}/{GITHUB_REPO_NAME}/main/{GITHUB_VIDEO_PATH}/{filename}"
+
 @app.get("/videos/{video_filename}")
 async def get_video(video_filename: str):
-    video_path = os.path.join(VIDEO_DIR, video_filename)
+    video_path = get_github_video_url(video_filename)
     
     if not os.path.exists(video_path):
         raise HTTPException(status_code=404, detail=f"Video {video_filename} not found")
