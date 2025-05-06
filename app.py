@@ -1,3 +1,40 @@
+# import streamlit as st
+# import requests
+# import os
+# import json
+# from typing import Iterator
+# import time
+
+# # Set Streamlit page configuration
+# st.set_page_config(
+#     page_title="RAG Video Chatbot",
+#     page_icon="🎥",
+#     layout="wide",
+#     initial_sidebar_state="expanded"
+# )
+
+# # Default API URL (will be overridden if environment variable is set)
+# API_URL = os.getenv("BACKEND_API_URL", "https://your-ngrok-url-here.ngrok-free.app/query")
+# HEALTH_CHECK_URL = API_URL.replace('/query', '/')
+
+# # Function to check if the API is available
+# def is_api_available():
+#     try:
+#         response = requests.get(HEALTH_CHECK_URL, timeout=5)
+#         return response.status_code == 200
+#     except:
+#         return False
+
+# # Function to handle API errors
+# def handle_api_error(message="An error occurred"):
+#     st.error(f" {message}")
+#     st.info("Please check if the backend server is running correctly.")
+#     st.markdown("""
+#     For local development:
+#     1. Ensure your GROQ API key is set in the `.env` file
+#     2. Run the backend with `uvicorn fastapi_backend:app --host 0.0.0.0 --port 8000`
+#     3. Set up Ngrok to expose your backend
+#     """)
 import streamlit as st
 import requests
 import os
@@ -13,9 +50,28 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Default API URL (will be overridden if environment variable is set)
-API_URL = os.getenv("BACKEND_API_URL", "https://your-ngrok-url-here.ngrok-free.app/query")
-HEALTH_CHECK_URL = API_URL.replace('/query', '/')
+# Get the API URL from Streamlit secrets or environment variables
+# This is the critical part for Streamlit Cloud deployment
+try:
+    # First try to get from Streamlit secrets (for Streamlit Cloud)
+    NGROK_URL = st.secrets.get("NGROK_URL", "")
+except:
+    # If that fails, try environment variables (for local development)
+    NGROK_URL = os.getenv("NGROK_URL", "")
+
+# If running locally and we have a saved URL, use that
+if not NGROK_URL and os.path.exists("ngrok_url.txt"):
+    with open("ngrok_url.txt", "r") as f:
+        NGROK_URL = f.read().strip()
+
+# Set default backend URL
+if NGROK_URL:
+    API_URL = f"{NGROK_URL}/query"
+    HEALTH_CHECK_URL = f"{NGROK_URL}/"
+else:
+    # Fallback to local development URL
+    API_URL = os.getenv("BACKEND_API_URL", "http://localhost:8000/query")
+    HEALTH_CHECK_URL = API_URL.replace('/query', '/')
 
 # Function to check if the API is available
 def is_api_available():
@@ -35,7 +91,7 @@ def handle_api_error(message="An error occurred"):
     2. Run the backend with `uvicorn fastapi_backend:app --host 0.0.0.0 --port 8000`
     3. Set up Ngrok to expose your backend
     """)
-
+    
 # Setup sidebar
 with st.sidebar:
     st.image("https://www.groq.com/images/logo.svg", width=100)
