@@ -1,5 +1,3 @@
-# Remember -> I'm Working on it.
-
 # QueryClip - AI Chatbot with Video Understanding and RAG
 
 <p align="center">
@@ -151,6 +149,10 @@ While the default is set to use Groq, you can modify `qa_engine.py` to use other
 ### Batch Processing
 
 For processing multiple videos at once, you can run the transcription and processing steps in batch mode.
+
+### Documentation
+
+https://code2tutorial.com/tutorial/6b289e78-2448-4a44-820a-e00d8bc3673b/index.md
 
 ## Acknowledgements
 
