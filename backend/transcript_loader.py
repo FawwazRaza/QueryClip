@@ -1,6 +1,8 @@
 """YouTube transcript extraction and LangChain Document creation."""
 
+import re
 import time
+import logging
 from typing import List
 
 import yt_dlp
@@ -8,9 +10,12 @@ from youtube_transcript_api import (
     YouTubeTranscriptApi,
     NoTranscriptFound,
     TranscriptsDisabled,
+    VideoUnavailable,
 )
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
+
+logger = logging.getLogger(__name__)
 
 
 def _extract_video_metadata(url: str) -> List[dict]:
@@ -63,48 +68,143 @@ def _extract_video_metadata(url: str) -> List[dict]:
     return videos
 
 
-def _fetch_transcript(video_id: str, max_retries: int = 3) -> List[dict]:
-    """Fetch transcript segments for a YouTube video.
+def _parse_vtt(content: str) -> str:
+    """Convert VTT/SRT subtitle content to plain text, deduplicating lines."""
+    seen: set = set()
+    text_parts: List[str] = []
 
-    Tries manual captions first, then auto-generated, then any available.
+    for line in content.strip().splitlines():
+        line = line.strip()
+        if not line or "-->" in line or line.startswith("WEBVTT") or line.isdigit():
+            continue
+        clean = re.sub(r"<[^>]+>", "", line)
+        clean = re.sub(r"\s+", " ", clean).strip()
+        if clean and clean not in seen:
+            seen.add(clean)
+            text_parts.append(clean)
 
-    Args:
-        video_id: YouTube video ID.
-        max_retries: Retry count on transient failures.
+    return " ".join(text_parts)
 
-    Returns:
-        List of segment dicts with keys: text, start, duration.
+
+def _fetch_via_yt_dlp(video_id: str) -> str:
+    """Fetch transcript via yt-dlp subtitle extraction.
+
+    Uses the iOS/web player client which bypasses most IP-based blocks that
+    affect youtube-transcript-api on cloud/ngrok IPs.  Fetches subtitle URLs
+    from yt-dlp's info dict and reads them in-memory (no disk writes).
     """
+    url = f"https://www.youtube.com/watch?v={video_id}"
+    ydl_opts = {
+        "skip_download": True,
+        "quiet": True,
+        "no_warnings": True,
+        "extractor_args": {
+            "youtube": {
+                "player_client": ["ios", "web"],
+            }
+        },
+        "http_headers": {
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/120.0.0.0 Safari/537.36"
+            ),
+        },
+    }
+
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+            subtitles = info.get("subtitles", {})
+            auto_captions = info.get("automatic_captions", {})
+
+            preferred = ["en", "en-US", "en-GB"]
+
+            # Prefer manual subtitles; fall back to auto-generated
+            for source in [subtitles, auto_captions]:
+                if not source:
+                    continue
+                lang_order = [l for l in preferred if l in source] + [
+                    l for l in source if l not in preferred
+                ]
+                for lang in lang_order:
+                    for fmt in source.get(lang, []):
+                        if fmt.get("ext") == "vtt" and fmt.get("url"):
+                            try:
+                                raw = ydl.urlopen(fmt["url"]).read().decode("utf-8")
+                                text = _parse_vtt(raw)
+                                if len(text) > 50:
+                                    logger.info(
+                                        "yt-dlp: fetched subtitles for %s (lang=%s)",
+                                        video_id, lang,
+                                    )
+                                    return text
+                            except Exception:
+                                continue
+    except Exception as exc:
+        logger.warning("yt-dlp subtitle fetch failed for %s: %s", video_id, exc)
+
+    return ""
+
+
+def _fetch_transcript(video_id: str, max_retries: int = 3) -> str:
+    """Fetch full transcript text for a YouTube video.
+
+    Layer 1 — youtube-transcript-api: fast, low-bandwidth.
+    Layer 2 — yt-dlp VTT extraction: robust, bypasses cloud/ngrok IP blocks.
+    """
+    # ── Layer 1: youtube-transcript-api ──────────────────────────────────────
     for attempt in range(max_retries):
         try:
             transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
 
-            for strategy in ["manual", "generated"]:
-                for lang in ["en", "en-US", "en-GB"]:
-                    try:
-                        if strategy == "manual":
-                            t = transcript_list.find_manually_created_transcript([lang])
-                        else:
-                            t = transcript_list.find_generated_transcript([lang])
-                        return t.fetch()
-                    except NoTranscriptFound:
-                        continue
+            # Manual captions (highest quality), preferred languages first
+            for lang in ["en", "en-US", "en-GB"]:
+                try:
+                    t = transcript_list.find_manually_created_transcript([lang])
+                    segs = t.fetch()
+                    text = " ".join(s.get("text", "").strip() for s in segs if s.get("text"))
+                    if text:
+                        logger.info("Transcript API: manual %s for %s", lang, video_id)
+                        return text
+                except NoTranscriptFound:
+                    continue
 
+            # Auto-generated captions
+            for lang in ["en", "en-US", "en-GB"]:
+                try:
+                    t = transcript_list.find_generated_transcript([lang])
+                    segs = t.fetch()
+                    text = " ".join(s.get("text", "").strip() for s in segs if s.get("text"))
+                    if text:
+                        logger.info("Transcript API: auto %s for %s", lang, video_id)
+                        return text
+                except NoTranscriptFound:
+                    continue
+
+            # Any available language as last resort
             available = list(transcript_list)
             if available:
-                return available[0].fetch()
+                segs = available[0].fetch()
+                text = " ".join(s.get("text", "").strip() for s in segs if s.get("text"))
+                if text:
+                    logger.info("Transcript API: fallback lang for %s", video_id)
+                    return text
 
-            return []
+            # Listed but nothing returned — skip retrying
+            break
 
-        except TranscriptsDisabled:
-            return []
-        except Exception:
+        except (TranscriptsDisabled, VideoUnavailable):
+            logger.info("Transcript API: disabled/unavailable for %s — trying yt-dlp", video_id)
+            break  # Jump straight to Layer 2
+        except Exception as exc:
+            logger.warning("Transcript API attempt %d failed for %s: %s", attempt + 1, video_id, exc)
             if attempt < max_retries - 1:
-                time.sleep(2**attempt)
-            else:
-                return []
+                time.sleep(2 ** attempt)
 
-    return []
+    # ── Layer 2: yt-dlp VTT extraction ───────────────────────────────────────
+    logger.info("Falling back to yt-dlp for %s", video_id)
+    return _fetch_via_yt_dlp(video_id)
 
 
 def load_youtube_documents(
@@ -137,16 +237,14 @@ def load_youtube_documents(
     )
 
     all_documents: List[Document] = []
+    failed_titles: List[str] = []
 
     for video in videos:
-        segments = _fetch_transcript(video["video_id"])
-        if not segments:
-            continue
+        full_text = _fetch_transcript(video["video_id"])
 
-        full_text = " ".join(
-            seg.get("text", "").strip() for seg in segments if seg.get("text")
-        )
-        if not full_text.strip():
+        if not full_text or len(full_text.strip()) < 50:
+            failed_titles.append(video["title"])
+            logger.warning("No usable transcript for: %s (%s)", video["title"], video["video_id"])
             continue
 
         chunks = splitter.split_text(full_text)
@@ -166,21 +264,17 @@ def load_youtube_documents(
             )
 
     if not all_documents:
+        failed = ", ".join(failed_titles) if failed_titles else "all videos"
         raise ValueError(
-            "No transcripts could be fetched. "
-            "The video(s) may have transcripts disabled or be unavailable."
+            f"No transcripts could be fetched for: {failed}. "
+            "Both youtube-transcript-api and yt-dlp subtitle extraction failed. "
+            "Possible causes: captions disabled on the video, age-gated content, "
+            "or the IP is temporarily rate-limited by YouTube."
         )
 
     return all_documents
 
 
 def get_video_titles(url: str) -> List[str]:
-    """Return the titles of all videos at a given URL without fetching transcripts.
-
-    Args:
-        url: YouTube video or playlist URL.
-
-    Returns:
-        List of video title strings.
-    """
+    """Return the titles of all videos at a given URL without fetching transcripts."""
     return [v["title"] for v in _extract_video_metadata(url)]
