@@ -1,9 +1,10 @@
 """YouTube transcript extraction and LangChain Document creation."""
 
+import concurrent.futures
 import re
 import time
 import logging
-from typing import List
+from typing import List, Tuple
 
 import yt_dlp
 from youtube_transcript_api import (
@@ -276,9 +277,19 @@ def load_youtube_documents(
     all_documents: List[Document] = []
     failed_titles: List[str] = []
 
-    for video in videos:
-        full_text = _fetch_transcript(video["video_id"])
+    def _fetch_one(video: dict) -> Tuple[dict, str]:
+        """Fetch transcript for a single video; returns (video, text)."""
+        return video, _fetch_transcript(video["video_id"])
 
+    # For playlists use a thread pool; for a single video keep it simple.
+    if len(videos) == 1:
+        pairs = [_fetch_one(videos[0])]
+    else:
+        max_workers = min(4, len(videos))
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
+            pairs = list(pool.map(_fetch_one, videos))
+
+    for video, full_text in pairs:
         if not full_text or len(full_text.strip()) < 50:
             failed_titles.append(video["title"])
             logger.warning("No usable transcript for: %s (%s)", video["title"], video["video_id"])

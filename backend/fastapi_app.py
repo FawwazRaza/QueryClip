@@ -1,12 +1,16 @@
 """FastAPI backend for the QueryClip YouTube RAG system."""
 
+import asyncio
+import json
+import queue
 import sys
+import threading
 from pathlib import Path
-from typing import List
+from typing import AsyncGenerator, List
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 # Ensure project root is on the path when running via uvicorn
@@ -14,7 +18,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from backend.transcript_loader import load_youtube_documents
 from backend.vector_store import add_documents, list_indexed_videos, clear_collection
-from backend.rag_chain import answer_query
+from backend.rag_chain import answer_query, stream_answer_query
 
 app = FastAPI(title="QueryClip API", version="1.0.0")
 
@@ -34,7 +38,7 @@ class ProcessRequest(BaseModel):
 class QueryRequest(BaseModel):
     query: str = Field(..., min_length=1, max_length=2000)
     chat_history: List[dict] = Field(default_factory=list)
-    top_k: int = Field(default=4, ge=1, le=10)
+    top_k: int = Field(default=6, ge=1, le=10)
 
 
 @app.get("/")
@@ -54,8 +58,9 @@ async def process_url(request: ProcessRequest):
         raise HTTPException(status_code=400, detail="URL must be a valid YouTube link.")
 
     try:
-        documents = load_youtube_documents(url)
-        count = add_documents(documents)
+        # Run blocking I/O in a thread so the event loop stays free
+        documents = await asyncio.to_thread(load_youtube_documents, url)
+        count = await asyncio.to_thread(add_documents, documents)
         return JSONResponse(
             content={
                 "success": True,
@@ -97,4 +102,55 @@ async def clear_videos():
     clear_collection()
     return JSONResponse(
         content={"success": True, "message": "All indexed videos have been cleared."}
+    )
+
+
+@app.post("/query/stream")
+async def stream_query_endpoint(request: QueryRequest):
+    """Stream the answer as Server-Sent Events (SSE).
+
+    Events:
+    - ``data: {"type": "sources", "sources": [...], "route": "..."}``
+    - ``data: {"type": "token",   "token":  "..."}``
+    - ``data: {"type": "error",   "message": "..."}``
+    - ``data: [DONE]``
+    """
+    query = request.query.strip()
+    if not query:
+        raise HTTPException(status_code=400, detail="Query cannot be empty.")
+
+    q: queue.Queue = queue.Queue()
+    _SENTINEL = object()
+
+    def _producer() -> None:
+        """Run the sync generator in a background thread, pushing events onto the queue."""
+        try:
+            for event_json in stream_answer_query(
+                query=query,
+                chat_history=request.chat_history,
+                top_k=request.top_k,
+            ):
+                q.put(event_json)
+        finally:
+            q.put(_SENTINEL)
+
+    threading.Thread(target=_producer, daemon=True).start()
+
+    async def _sse_generator() -> AsyncGenerator[str, None]:
+        loop = asyncio.get_running_loop()
+        while True:
+            item = await loop.run_in_executor(None, q.get)
+            if item is _SENTINEL:
+                break
+            yield f"data: {item}\n\n"
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(
+        _sse_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
     )

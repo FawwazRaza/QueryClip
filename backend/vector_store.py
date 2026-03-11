@@ -22,9 +22,12 @@ def _get_encoder() -> SentenceTransformer:
     return _encoder
 
 
+_UPSERT_BATCH = 200   # ChromaDB recommends ≤ 200 per call
+
+
 def _embed(texts: List[str]) -> List[List[float]]:
     embeddings = _get_encoder().encode(
-        texts, batch_size=32, normalize_embeddings=True, show_progress_bar=False
+        texts, batch_size=64, normalize_embeddings=True, show_progress_bar=False
     )
     return embeddings.tolist()
 
@@ -74,12 +77,15 @@ def add_documents(documents: List[Document]) -> int:
     ]
     embeddings = _embed(texts)
 
-    collection.upsert(
-        embeddings=embeddings,
-        documents=texts,
-        metadatas=metadatas,
-        ids=ids,
-    )
+    # Upsert in safe batches (ChromaDB max ~200 per call)
+    for start in range(0, len(documents), _UPSERT_BATCH):
+        end = start + _UPSERT_BATCH
+        collection.upsert(
+            embeddings=embeddings[start:end],
+            documents=texts[start:end],
+            metadatas=metadatas[start:end],
+            ids=ids[start:end],
+        )
 
     return len(documents)
 
