@@ -1,163 +1,117 @@
-# QueryClip - AI Chatbot with Video Understanding and RAG
+# QueryClip
 
-<p align="center">
-  <img src="https://github.com/FawwazRaza/QueryClip/blob/main/Flow%20diagrams/complete%20flow.png" alt="QueryClip Architecture" width="800">
-</p>
+A YouTube transcript RAG chatbot. Paste a YouTube video or playlist URL, extract the transcript automatically, and ask questions grounded strictly in the video content. Powered by Groq LLM, ChromaDB, and Streamlit.
 
-## Overview
+## Architecture
 
-QueryClip is an AI-powered chatbot that understands and answers questions about your video content. It uses cutting-edge technology including:
+```
+User (Streamlit) → FastAPI backend (ngrok tunnel)
+                        ↓
+             [Process YouTube URL]
+             yt-dlp       → extract video list
+             youtube-transcript-api → fetch captions
+             sentence-transformers  → embed chunks
+             ChromaDB               → store vectors
+                        ↓
+             [Query]
+             embed query → ChromaDB search → top-4 chunks
+             Groq LLM    → answer grounded in transcript
+```
 
-- **Speech-to-Text Transcription**: Extracts spoken content from videos
-- **Text Chunking**: Breaks transcripts into manageable pieces
-- **Embeddings**: Converts text into meaningful vector representations
-- **Vector Database**: Stores and retrieves knowledge efficiently
-- **Retrieval-Augmented Generation (RAG)**: Enhances LLM responses with relevant context
+## Setup
 
-With QueryClip, you can upload videos and immediately start asking questions about their content. The system will provide accurate, contextual answers based on what was actually said in the videos.
-
-## Features
-
-- **Video Content Understanding**: Automatically transcribes and processes video content
-- **Natural Language Querying**: Ask questions in plain language
-- **Contextual Responses**: Get accurate answers based on your video content
-- **Simple User Interface**: Easy-to-use frontend for interacting with the chatbot
-- **Modular Architecture**: Well-structured codebase for easy customization
-
-## Requirements
-
-- Python 3.8+
-- Internet connection (for API access)
-- [Groq](https://groq.com/) API key (free tier available)
-- Git
-
-## Quick Start
-
-### 1. Clone the Project
+### 1. Clone and create environment
 
 ```bash
 git clone https://github.com/FawwazRaza/QueryClip.git
 cd QueryClip
-```
-
-### 2. Add Your Videos
-
-Place your `.mp4` video files in the videos directory:
-
-```bash
-Add your video files to data/videos/
-```
-
-### 3. Set Up Environment
-
-Create a virtual environment and install dependencies:
-
-```bash
-conda create -n myenv
-conda activate myenv
-# or
-conda activate 
+python -m venv venv
+# Windows:
+venv\Scripts\activate
+# macOS/Linux:
+source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 4. Add Your API Key
-
-Sign up for a free [Groq API key](https://console.groq.com/signup).
-
-Write in a `.env` file in the project root:
-
-```
-GROQ_API_KEY=your_key_here
-```
-
-### 5. Process Videos and Start the Chatbot
-
-Run each module in sequence:
+### 2. Configure environment variables
 
 ```bash
-cd modules
-
-# Step 1: Transcribe videos to text
-python transcriber.py
-
-# Step 2: Chunk the transcribed text
-python chunker.py
-
-# Step 3: Generate embeddings
-python embedder.py
-
-# Step 4: Store embeddings in vector database
-python vector_store.py
-
-# Step 5: Run the QA engine backend
-python qa_engine.py
+cp .env.example .env
 ```
 
-### 6. Launch the User Interface
+Edit `.env` and fill in:
 
-Open two terminal windows:
+| Variable | Description |
+|---|---|
+| `GROQ_API_KEY` | From https://console.groq.com |
+| `NGROK_AUTH_TOKEN` | From https://dashboard.ngrok.com/get-started/your-authtoken |
 
-**Terminal 1 - Run the FastAPI backend:**
+### 3. Run the backend
+
 ```bash
-cd modules
-python -m uvicorn fastapi_backend_updated:app --reload --host 0.0.0.0 --port 8000
+python ngrok_backend.py
 ```
 
-**Terminal 2 - Run the Streamlit frontend and backend:**
+This starts FastAPI on port 8000 and opens a tunnel at `https://great-repeatedly-alien.ngrok-free.app`.
+
+### 4. Run the Streamlit app
+
+In a separate terminal:
+
 ```bash
-cd modules
-python run_app.py
+streamlit run app.py
 ```
 
-### 7. Start Chatting!
+Open http://localhost:8501 in your browser.
 
-Open your browser to the URL shown by Streamlit (typically http://localhost:8501) and start asking questions about your videos!
+## Usage
 
-## Project Structure
+1. In the sidebar, paste a YouTube video or playlist URL.
+2. Click **Process** and wait for indexing (a few seconds per video).
+3. Ask questions in the chat. Answers are drawn exclusively from the transcript.
+
+### Special commands
+
+| Command | Action |
+|---|---|
+| `/clear` | Clear chat history |
+| `/help` | Show usage instructions |
+
+## Streamlit Cloud deployment
+
+1. Push the repo to GitHub (`.env` is gitignored — never committed).
+2. Deploy at https://share.streamlit.io.
+3. In Streamlit Cloud secrets, add:
+   ```toml
+   BACKEND_URL = "https://great-repeatedly-alien.ngrok-free.app"
+   ```
+4. Keep `python ngrok_backend.py` running locally to serve the backend.
+
+## Project structure
 
 ```
 QueryClip/
-├── data/
-│   ├── videos/           # Where you place your video files
-│   ├── transcripts/      # Generated text from videos
-│   ├── chunks/           # Segmented text chunks
-│   └── embeddings/       # Vector representations
-├── modules/
-│   ├── transcriber.py    # Converts video to text
-│   ├── chunker.py        # Breaks the text into chunks
-│   ├── embedder.py       # Creates embeddings
-│   ├── vector_store.py   # Saves embeddings in vector DB
-│   ├── qa_engine.py      # Handles RAG operations
-│   ├── fastapi_backend.py # API endpoints
-│   └── streamlit.py      # User interface
-├── Flow diagrams/        # Architecture diagrams
-├── .env                  # Environment variables (API keys)
-├── requirements.txt      # Python dependencies
-└── README.md             # This file
+├── app.py                  Streamlit frontend
+├── ngrok_backend.py        Backend launcher with ngrok tunnel
+├── requirements.txt
+├── .env.example
+├── .gitignore
+├── backend/
+│   ├── transcript_loader.py   yt-dlp + youtube-transcript-api
+│   ├── vector_store.py        ChromaDB CRUD
+│   ├── rag_chain.py           Groq LLM + RAG pipeline
+│   └── fastapi_app.py         REST API endpoints
+└── data/
+    └── chroma_db/             ChromaDB persistent storage (gitignored)
 ```
 
-## Advanced Usage
+## Troubleshooting
 
-### Customizing Chunk Size
+**"Backend is offline"** — Run `python ngrok_backend.py` and click Check Connection in the sidebar.
 
-You can modify the chunk size in `chunker.py` to balance between context window limitations and maintaining coherence.
+**"No transcripts could be fetched"** — The video may have captions disabled. Try a different video.
 
-### Using Different LLM Providers
+**Groq rate limit errors** — The free tier has per-minute token limits. Wait a moment and retry.
 
-While the default is set to use Groq, you can modify `qa_engine.py` to use other providers like OpenAI, Anthropic, or local models.
+**ngrok domain not connecting** — Ensure `NGROK_AUTH_TOKEN` is set correctly in `.env`. Static domains require an authenticated account.
 
-### Batch Processing
-
-For processing multiple videos at once, you can run the transcription and processing steps in batch mode.
-
-### Documentation
-
-https://code2tutorial.com/tutorial/6b289e78-2448-4a44-820a-e00d8bc3673b/index.md
-
-## Acknowledgements
-
-- [Groq](https://groq.com/) for providing fast LLM inference
-- [Sentence Transformers](https://www.sbert.net/) for embedding generation
-- [ChromaDB](https://www.trychroma.com/) for vector storage
-- [Whisper](https://github.com/openai/whisper) for audio transcription
-- [FastAPI](https://fastapi.tiangolo.com/) and [Streamlit](https://streamlit.io/) for the web interface

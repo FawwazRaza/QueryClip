@@ -1,22 +1,25 @@
-chromadb>=0.4.24
-torch
-transformers
-sentence-transformers
-groq>=0.3.0
+# Core RAG dependencies
+chromadb>=0.5.0
+sentence-transformers>=3.0.0
+groq>=0.9.0
+
+# YouTube processing
+yt-dlp>=2024.1.0
+youtube-transcript-api>=0.6.2
+
+# LangChain (lightweight — core + text splitters only)
+langchain-core>=0.3.0
+langchain-text-splitters>=0.3.0
+
+# API and frontend
+fastapi>=0.110.0
+uvicorn[standard]>=0.29.0
+streamlit>=1.35.0
+requests>=2.31.0
+pydantic>=2.0.0
+
+# Utilities
 python-dotenv>=1.0.0
-openai-whisper
-moviepy
-langchain-huggingface
-langchain
-langchain-groq
-fastapi
-pydantic
-streamlit
-requests
-uvicorn
-whisper
-sseclient
-httpx
-pyngrok
+pyngrok>=7.0.0
 
 

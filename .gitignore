@@ -1,0 +1,46 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments
+venv/
+.venv/
+env/
+.env/
+
+# Environment variables (never commit real keys)
+.env
+.env.local
+
+# Streamlit secrets
+.streamlit/secrets.toml
+
+# Data — transcripts, vector DB, raw videos
+data/chroma_db/
+data/chunks/
+data/transcriptions.json
+data/videos/
+
+# ngrok runtime file
+ngrok_url.txt
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log

@@ -1,476 +1,311 @@
-import streamlit as st
-import requests
-import os
-import json
-import time
-from typing import Iterator
+"""QueryClip — YouTube Transcript RAG Chatbot."""
 
-# Set Streamlit page configuration
+import os
+from pathlib import Path
+
+import requests
+import streamlit as st
+
 st.set_page_config(
-    page_title="RAG Video Chatbot",
-    page_icon="🎥",
+    page_title="QueryClip",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="expanded",
 )
 
-# Get the API URL from Streamlit secrets or environment variables
-try:
-    # First try to get from Streamlit secrets (for Streamlit Cloud)
-    NGROK_URL = st.secrets.get("NGROK_URL", "")
-except:
-    # If that fails, try environment variables (for local development)
-    NGROK_URL = os.getenv("NGROK_URL", "")
+# ─── Backend URL resolution ───────────────────────────────────────────────────
 
-# If running locally and we have a saved URL, use that
-if not NGROK_URL and os.path.exists("ngrok_url.txt"):
-    with open("ngrok_url.txt", "r") as f:
-        NGROK_URL = f.read().strip()
+_STATIC_DOMAIN = "https://great-repeatedly-alien.ngrok-free.app"
+_NGROK_HEADERS = {"ngrok-skip-browser-warning": "true"}
 
-# Set default backend URL
-if NGROK_URL:
-    API_URL = f"{NGROK_URL}/query"
-    HEALTH_CHECK_URL = f"{NGROK_URL}/"
-    VIDEO_BASE_URL = f"{NGROK_URL}/videos"  # URL for accessing videos from backend
-else:
-    # Fallback to local development URL
-    API_URL = os.getenv("BACKEND_API_URL", "http://localhost:8000/query")
-    HEALTH_CHECK_URL = API_URL.replace('/query', '/')
-    VIDEO_BASE_URL = "http://localhost:8000/videos"
 
-# GitHub Video Repository Configuration
-# Update these with your actual GitHub username and repository name
-GITHUB_REPO_OWNER = "FawwazRaza"  # Replace with your GitHub username
-GITHUB_REPO_NAME = "QueryClip"       # Replace with your repository name
-GITHUB_VIDEO_PATH = "data/videos"         # Path to videos folder in your repository
-
-def get_github_video_url(filename):
-    """Generate a URL for a video stored in a public GitHub repository"""
-    return f"https://raw.githubusercontent.com/{GITHUB_REPO_OWNER}/{GITHUB_REPO_NAME}/main/{GITHUB_VIDEO_PATH}/{filename}"
-
-# Function to check if the API is available
-def is_api_available():
+def _resolve_api_url() -> str:
     try:
-        response = requests.get(HEALTH_CHECK_URL, timeout=5)
-        return response.status_code == 200
-    except:
+        url = st.secrets.get("BACKEND_URL", "")
+        if url:
+            return url.rstrip("/")
+    except Exception:
+        pass
+
+    env_url = os.getenv("BACKEND_URL", "")
+    if env_url:
+        return env_url.rstrip("/")
+
+    saved = Path("ngrok_url.txt")
+    if saved.exists():
+        text = saved.read_text().strip()
+        if text:
+            return text.rstrip("/")
+
+    return _STATIC_DOMAIN
+
+
+API_URL = _resolve_api_url()
+
+# ─── API helpers ──────────────────────────────────────────────────────────────
+
+
+def _is_backend_available() -> bool:
+    try:
+        r = requests.get(f"{API_URL}/", timeout=5, headers=_NGROK_HEADERS)
+        return r.status_code == 200
+    except Exception:
         return False
 
-# Function to handle API errors
-def handle_api_error(message="An error occurred"):
-    st.error(f" {message}")
-    st.info("Please check if the backend server is running correctly.")
-    st.markdown("""
-    If this is your first time running the app, please check:
-    1. Is the backend server running?
-    2. Have you set your GROQ API key in the `.env` file?
-    3. Are there any videos in your GitHub repository?
-    """)
-    
-    # Show the URL we're trying to connect to for debugging
-    st.markdown(f"Trying to connect to: `{API_URL}`")
 
-def display_video(video_filename, start_time=0):
-    """Display video from GitHub repository or backend server"""
-    
-    # For Streamlit Cloud: Use GitHub hosted videos
-    video_url = get_github_video_url(video_filename)
-    
+def _process_url(youtube_url: str) -> dict:
+    r = requests.post(
+        f"{API_URL}/process",
+        json={"url": youtube_url},
+        timeout=300,
+        headers=_NGROK_HEADERS,
+    )
+    r.raise_for_status()
+    return r.json()
+
+
+def _query_backend(query: str, history: list) -> dict:
+    r = requests.post(
+        f"{API_URL}/query",
+        json={"query": query, "chat_history": history},
+        timeout=30,
+        headers=_NGROK_HEADERS,
+    )
+    r.raise_for_status()
+    return r.json()
+
+
+def _list_videos() -> list:
     try:
-        # Check if video exists by making a HEAD request
-        response = requests.head(video_url, timeout=5)
-        
-        if response.status_code == 200:
-            st.video(video_url, start_time=int(float(src['start_time'])))
-        else:
-            # Fallback to backend server (for local development)
-            backend_video_url = f"{VIDEO_BASE_URL}/{video_filename}"
-            
-            # Check if video exists on backend server
-            backend_response = requests.head(backend_video_url, timeout=5)
-            if backend_response.status_code == 200:
-                st.video(backend_video_url, start_time=int(float(start_time)))
-            else:
-                st.warning(f"Video {video_filename} not found in GitHub repository or backend server.")
-                st.info("Make sure the video is uploaded to your GitHub repository or backend server.")
-    except Exception as e:
-        st.error(f"Error accessing video: {str(e)}")
-        st.info(f"Attempted to access: {video_url}")
+        r = requests.get(f"{API_URL}/videos", timeout=10, headers=_NGROK_HEADERS)
+        if r.status_code == 200:
+            return r.json().get("videos", [])
+    except Exception:
+        pass
+    return []
 
-# Setup sidebar
-with st.sidebar:
-    st.image("https://www.groq.com/images/logo.svg", width=100)
-    st.title("RAG Video Chatbot")
-    
-    if not is_api_available():
-        st.error(" Backend API is not available")
-        st.markdown(f"Trying to connect to: {API_URL}")
-    else:
-        st.success("Connected to backend API")
-        
-        # Try to get list of available videos from backend
-        try:
-            response = requests.get(f"{NGROK_URL}/videos/list", timeout=5)
-            if response.status_code == 200:
-                videos = response.json().get("videos", [])
-                st.write(f" Found {len(videos)} videos in library")
-                if videos:
-                    with st.expander("Video Library"):
-                        for video in videos:
-                            st.write(f"- {video}")
-                else:
-                    st.warning("No videos found on the backend server.")
-        except:
-            st.info("Could not retrieve video list from backend.")
-    
-    # Information about videos
-    st.write("This app queries video information from a backend API.")
-    st.info("Videos are stored on GitHub for Streamlit Cloud deployment.")
-    
-    with st.expander("Help & Information"):
-        st.markdown("""
-        ### How to use this chatbot:
 
-        - **Ask about videos**: Query specific information from your video library
-        - **General questions**: The bot can also answer general questions
-        - **Commands**: Try typing "help" or "clear" to see special commands
-        
-        ### Adding videos:
-        Videos need to be added to your GitHub repository for Streamlit Cloud deployment.
-        """)
-    
-    streaming_enabled = st.checkbox("Enable streaming", value=True, help="Show tokens as they're generated")
-    
-    if st.button("Clear Chat History"):
-        st.session_state.chat_history = []
-        st.rerun()
+def _clear_all() -> None:
+    requests.delete(f"{API_URL}/videos", timeout=10, headers=_NGROK_HEADERS)
 
-st.title(" Video Knowledge Chatbot")
-st.markdown("Ask me anything about your videos or any general questions!")
 
-# Initialize chat history
+# ─── Session state ────────────────────────────────────────────────────────────
+
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
+if "processed_urls" not in st.session_state:
+    st.session_state.processed_urls: list = []
+if "backend_ok" not in st.session_state:
+    st.session_state.backend_ok = False
 
-# Display chat history
-for message in st.session_state.chat_history:
-    if message["role"] == "user":
-        with st.chat_message("user", avatar="👤"):
-            st.write(message["content"])
-    else:
-        with st.chat_message("assistant", avatar="🤖"):
-            st.write(message["content"])
-            
-            if "source" in message and message["source"]:
-                src = message["source"]
-                st.markdown(
-                    f"**Source:** `{src['file_name']}` | Time: `{src['start_time']}s - {src['end_time']}s`"
-                )
-                
-                # Display video from GitHub
-                display_video(src['file_name'], src['start_time'])
-                
-                if "chunks" in message and message["chunks"]:
-                    with st.expander(" View Related Video Contexts"):
-                        for idx, chunk in enumerate(message["chunks"], 1):
-                            similarity = chunk.get('similarity', 0)
-                            if similarity > 0.8:
-                                sim_color = "green"
-                            elif similarity > 0.5:
-                                sim_color = "blue"
-                            else:
-                                sim_color = "red"
-                                
-                            st.markdown(f"##### Chunk {idx} - Relevance: :{sim_color}[{similarity:.2f}]")
-                            st.markdown(f"*Source: {chunk['file_name']}, Time: {chunk['start_time']}s - {chunk['end_time']}s*")
-                            st.markdown(f"```\n{chunk['text']}\n```")
-                            st.markdown("---")
+# ─── Sidebar ──────────────────────────────────────────────────────────────────
 
-# Function to process special commands
-def process_special_commands(query):
-    query_lower = query.lower().strip()
-    
-    if query_lower == "clear":
-        st.session_state.chat_history = []
-        st.rerun()
-        return True
-    
-    if query_lower in ["help", "commands"]:
-        help_message = {
-            "role": "assistant",
-            "content": """
-            ### Available Commands:
-            - **clear**: Clear the chat history
-            - **help**: Display this help message
-            
-            ### Example Questions:
-            - "Tell me about the content in [video name]"
-            - "What are the key points discussed in the videos?"
-            - "Can you summarize the information about [topic]?"
-            """
-        }
-        st.session_state.chat_history.append({"role": "user", "content": query})
-        st.session_state.chat_history.append(help_message)
-        st.rerun()
-        return True
-    
-    return False
+with st.sidebar:
+    st.title("QueryClip")
+    st.caption("YouTube Transcript RAG System")
+    st.divider()
 
-# Function to process streaming responses
-def process_stream_manually(response):
-    source_info = None
-    chunks_info = None
-    complete_response = ""
-    
-    try:
-        for line in response.iter_lines():
-            if not line:
-                continue
-                
-            line = line.decode('utf-8')
-            if line.startswith('data: '):
-                data_str = line[6:]  
+    col_check, col_status = st.columns([2, 1])
+    with col_check:
+        if st.button("Check Connection", use_container_width=True):
+            st.session_state.backend_ok = _is_backend_available()
+    with col_status:
+        if st.session_state.backend_ok:
+            st.success("Online")
+        else:
+            st.error("Offline")
+
+    if not st.session_state.backend_ok:
+        st.caption(f"Expected at: {API_URL}")
+
+    st.divider()
+
+    st.subheader("Add YouTube Content")
+    youtube_url = st.text_input(
+        "YouTube URL",
+        placeholder="https://youtube.com/watch?v=... or playlist",
+        label_visibility="collapsed",
+    )
+
+    col_proc, col_clr = st.columns(2)
+    with col_proc:
+        process_btn = st.button("Process", use_container_width=True, type="primary")
+    with col_clr:
+        clear_btn = st.button("Clear All", use_container_width=True)
+
+    if process_btn:
+        if not youtube_url.strip():
+            st.warning("Enter a YouTube URL first.")
+        elif not st.session_state.backend_ok:
+            st.error("Backend is offline. Start ngrok_backend.py, then click Check Connection.")
+        else:
+            with st.spinner("Extracting and indexing transcripts..."):
                 try:
-                    data = json.loads(data_str)
-                    
-                    if 'metadata' in data:
-                        metadata = data['metadata']
-                        source_info = metadata.get('source')
-                        chunks_info = metadata.get('chunks')
-                        continue
-                    
-                    if 'token' in data:
-                        token = data['token']
-                        if '<think>' in token.lower():  
-                            continue
-                        complete_response += token
-                        yield {'type': 'token', 'content': token}
-                    
-                    if 'end' in data and data['end']:
-                        if 'complete_response' in data:
-                            complete_response = data['complete_response']
-                        yield {'type': 'complete', 'content': complete_response, 'source': source_info, 'chunks': chunks_info}
-                    
-                    if 'error' in data:
-                        yield {'type': 'error', 'content': f"Error: {data['error']}"}
-                        
-                except json.JSONDecodeError:
-                    yield {'type': 'error', 'content': f"Error decoding response: {data_str}"}
-                    
-    except Exception as e:
-        yield {'type': 'error', 'content': f"Error processing stream: {str(e)}"}
+                    result = _process_url(youtube_url.strip())
+                    chunks = result.get("chunks_stored", 0)
+                    st.success(f"Indexed {chunks} transcript chunks.")
+                    if youtube_url not in st.session_state.processed_urls:
+                        st.session_state.processed_urls.append(youtube_url)
+                    st.rerun()
+                except requests.HTTPError as exc:
+                    try:
+                        detail = exc.response.json().get("detail", str(exc))
+                    except Exception:
+                        detail = str(exc)
+                    st.error(f"Processing failed: {detail}")
+                except requests.ConnectionError:
+                    st.error("Cannot reach backend. Is ngrok_backend.py running?")
+                except Exception as exc:
+                    st.error(f"Error: {exc}")
 
-# Get user input
-query = st.chat_input("Type your message here...")
-
-if query:
-    if process_special_commands(query):
-        pass  
-    else:
-        with st.chat_message("user", avatar="👤"):
-            st.write(query)
-        
-        st.session_state.chat_history.append({"role": "user", "content": query})
-
-        if not is_api_available():
-            handle_api_error("Backend API is not available")
-            st.session_state.chat_history.append({
-                "role": "assistant", 
-                "content": " I'm having trouble connecting to the backend. Please check if the server is running."
-            })
+    if clear_btn:
+        if not st.session_state.backend_ok:
+            st.error("Backend is offline.")
+        else:
+            _clear_all()
+            st.session_state.processed_urls = []
+            st.session_state.chat_history = []
+            st.success("All indexed data cleared.")
             st.rerun()
 
-        with st.chat_message("assistant", avatar="🤖") as message_container:
-            if streaming_enabled:
-                try:
-                    response_placeholder = st.empty()
-                    collected_tokens = ""
-                    source_data = None
-                    chunks_data = None
-                    
-                    with st.spinner("Connecting..."):
-                        response = requests.post(
-                            API_URL,
-                            json={
-                                "query": query,
-                                "chat_history": st.session_state.chat_history[:-1],
-                                "stream": True
-                            },
-                            stream=True,
-                            timeout=60,
-                            headers={'Accept': 'text/event-stream'} 
-                        )
-                    
-                    if response.status_code == 200:
-                        stream_generator = process_stream_manually(response)
-                        for message in stream_generator:
-                            if message['type'] == 'token':
-                                collected_tokens += message['content']
-                                response_placeholder.markdown(collected_tokens + "▌")  
-                            
-                            elif message['type'] == 'complete':
-                                final_response = message['content']
-                                source_data = message.get('source')
-                                chunks_data = message.get('chunks')
-                                response_placeholder.markdown(final_response)  
-                                
-                                assistant_message = {
-                                    "role": "assistant", 
-                                    "content": final_response
-                                }
-                                
-                                if source_data and "Not found in the dataset" not in final_response:
-                                    assistant_message["source"] = source_data
-                                    if chunks_data:
-                                        assistant_message["chunks"] = chunks_data
-                                
-                                st.session_state.chat_history.append(assistant_message)
-                                
-                                if source_data and "Not found in the dataset" not in final_response:
-                                    src = source_data
-                                    st.markdown(
-                                        f"**Source:** `{src['file_name']}` | Time: `{src['start_time']}s - {src['end_time']}s`"
-                                    )
-                                    
-                                    # Display video from GitHub
-                                    display_video(src['file_name'], src['start_time'])
-                                    
-                                    if chunks_data:
-                                        with st.expander(" View Related Video Contexts"):
-                                            for idx, chunk in enumerate(chunks_data, 1):
-                                                similarity = chunk.get('similarity', 0)
-                                                if similarity > 0.8:
-                                                    sim_color = "green"
-                                                elif similarity > 0.5:
-                                                    sim_color = "blue"
-                                                else:
-                                                    sim_color = "red"
-                                                    
-                                                st.markdown(f"##### Chunk {idx} - Relevance: :{sim_color}[{similarity:.2f}]")
-                                                st.markdown(f"*Source: {chunk['file_name']}, Time: {chunk['start_time']}s - {chunk['end_time']}s*")
-                                                st.markdown(f"```\n{chunk['text']}\n```")
-                                                st.markdown("---")
-                            
-                            elif message['type'] == 'error':
-                                st.error(message['content'])
-                                st.session_state.chat_history.append({
-                                    "role": "assistant", 
-                                    "content": message['content']
-                                })
-                    
-                    else:
-                        error_msg = f"Server error: {response.status_code}"
-                        try:
-                            error_details = response.json()
-                            if "detail" in error_details:
-                                error_msg += f" - {error_details['detail']}"
-                        except:
-                            pass
-                        
-                        st.error(error_msg)
-                        st.info("Please check the backend server logs for more information.")
-                        
-                        st.session_state.chat_history.append({
-                            "role": "assistant", 
-                            "content": f" {error_msg}"
-                        })
-                
-                except Exception as e:
-                    st.error(f"Error: {str(e)}")
-                    st.session_state.chat_history.append({
-                        "role": "assistant", 
-                        "content": f" Error: {str(e)}"
-                    })
-            
-            else:
-                # Non-streaming implementation
-                try:
-                    with st.spinner("Getting answer..."):
-                        response = requests.post(
-                            API_URL,
-                            json={
-                                "query": query,
-                                "chat_history": st.session_state.chat_history[:-1],
-                                "stream": False
-                            },
-                            timeout=60
-                        )
-                    
-                    if response.status_code == 200:
-                        response_data = response.json()
-                        answer = response_data.get("answer", "No answer received")
-                        source_data = response_data.get("source")
-                        chunks_data = response_data.get("chunks", [])
-                        
-                        st.write(answer)
-                        
-                        assistant_message = {
-                            "role": "assistant", 
-                            "content": answer
-                        }
-                        
-                        if source_data and "Not found in the dataset" not in answer:
-                            assistant_message["source"] = source_data
-                            if chunks_data:
-                                assistant_message["chunks"] = chunks_data
-                        
-                        st.session_state.chat_history.append(assistant_message)
-                        
-                        if source_data and "Not found in the dataset" not in answer:
-                            src = source_data
-                            st.markdown(
-                                f"**Source:** `{src['file_name']}` | Time: `{src['start_time']}s - {src['end_time']}s`"
-                            )
-                            
-                            # Display video from GitHub
-                            display_video(src['file_name'], src['start_time'])
-                            
-                            if chunks_data:
-                                with st.expander(" View Related Video Contexts"):
-                                    for idx, chunk in enumerate(chunks_data, 1):
-                                        similarity = chunk.get('similarity', 0)
-                                        if similarity > 0.8:
-                                            sim_color = "green"
-                                        elif similarity > 0.5:
-                                            sim_color = "blue"
-                                        else:
-                                            sim_color = "red"
-                                            
-                                        st.markdown(f"##### Chunk {idx} - Relevance: :{sim_color}[{similarity:.2f}]")
-                                        st.markdown(f"*Source: {chunk['file_name']}, Time: {chunk['start_time']}s - {chunk['end_time']}s*")
-                                        st.markdown(f"```\n{chunk['text']}\n```")
-                                        st.markdown("---")
-                    
-                    else:
-                        error_msg = f"Server error: {response.status_code}"
-                        try:
-                            error_details = response.json()
-                            if "detail" in error_details:
-                                error_msg += f" - {error_details['detail']}"
-                        except:
-                            pass
-                        
-                        st.error(error_msg)
-                        st.info("Please check the backend server logs for more information.")
-                        
-                        st.session_state.chat_history.append({
-                            "role": "assistant", 
-                            "content": f" {error_msg}"
-                        })
+    st.divider()
 
-                except Exception as e:
-                    st.error(f"Error: {str(e)}")
-                    st.session_state.chat_history.append({
-                        "role": "assistant", 
-                        "content": f" Error: {str(e)}"
-                    })
+    st.subheader("Indexed Videos")
+    if st.session_state.backend_ok:
+        videos = _list_videos()
+        if videos:
+            for v in videos:
+                with st.expander(v.get("title", "Unknown"), expanded=False):
+                    if v.get("url"):
+                        st.markdown(f"[Open on YouTube]({v['url']})")
+                    if v.get("playlist_name"):
+                        st.caption(f"Playlist: {v['playlist_name']}")
+        else:
+            st.caption("No videos indexed yet.")
+    else:
+        st.caption("Connect to backend to view indexed videos.")
 
-# Display welcome message if no chat history
+    st.divider()
+
+    if st.button("Clear Chat", use_container_width=True):
+        st.session_state.chat_history = []
+        st.rerun()
+
+    st.caption(f"Backend: {API_URL}")
+
+# ─── Main area ────────────────────────────────────────────────────────────────
+
+st.title("QueryClip")
+st.caption("Ask questions grounded in the content of any YouTube video or playlist.")
+
 if not st.session_state.chat_history:
-    with st.chat_message("assistant", avatar="🤖"):
-        st.write("""
-         Welcome to the RAG Video Chatbot!
-        
-        I can help you find information from your video library. Try asking me questions about any video content you've added to the system.
-        
-        Type 'help' to see available commands.
-        """)
+    st.info(
+        "Add a YouTube URL in the sidebar and click Process. "
+        "Once indexed, ask any question and receive answers drawn strictly from the transcript."
+    )
+
+for msg in st.session_state.chat_history:
+    with st.chat_message(msg["role"]):
+        st.write(msg["content"])
+        if msg["role"] == "assistant" and msg.get("sources"):
+            with st.expander("View sources", expanded=False):
+                for src in msg["sources"]:
+                    st.markdown(
+                        f"**{src.get('title', 'Unknown')}** — relevance: {src.get('similarity', 0):.2f}"
+                    )
+                    if src.get("url"):
+                        st.caption(src["url"])
+                    if src.get("text_preview"):
+                        st.caption(f'"{src["text_preview"]}"')
+                    st.divider()
+
+user_input = st.chat_input("Ask a question about your videos...")
+
+if user_input:
+    stripped = user_input.strip()
+
+    if stripped.lower() == "/clear":
+        st.session_state.chat_history = []
+        st.rerun()
+
+    elif stripped.lower() == "/help":
+        with st.chat_message("assistant"):
+            st.markdown(
+                "**Commands:**\n"
+                "- `/clear` — Clear chat history\n"
+                "- `/help` — Show this message\n\n"
+                "**Usage:**\n"
+                "1. Paste a YouTube URL in the sidebar, click Process.\n"
+                "2. Wait for indexing to complete.\n"
+                "3. Ask questions — answers come only from indexed transcripts."
+            )
+
+    else:
+        with st.chat_message("user"):
+            st.write(stripped)
+
+        api_history = [
+            {"role": m["role"], "content": m["content"]}
+            for m in st.session_state.chat_history
+        ]
+        st.session_state.chat_history.append({"role": "user", "content": stripped})
+
+        if not st.session_state.backend_ok:
+            st.session_state.backend_ok = _is_backend_available()
+
+        if not st.session_state.backend_ok:
+            err = "Backend is not connected. Start ngrok_backend.py and click Check Connection."
+            with st.chat_message("assistant"):
+                st.error(err)
+            st.session_state.chat_history.append(
+                {"role": "assistant", "content": err, "sources": []}
+            )
+        else:
+            with st.chat_message("assistant"):
+                with st.spinner("Searching transcripts..."):
+                    try:
+                        result = _query_backend(stripped, api_history)
+                        answer = result.get("answer", "No response received.")
+                        sources = result.get("sources", [])
+
+                        st.write(answer)
+
+                        if sources:
+                            with st.expander("View sources", expanded=False):
+                                for src in sources:
+                                    st.markdown(
+                                        f"**{src.get('title', 'Unknown')}**"
+                                        f" — relevance: {src.get('similarity', 0):.2f}"
+                                    )
+                                    if src.get("url"):
+                                        st.caption(src["url"])
+                                    if src.get("text_preview"):
+                                        st.caption(f'"{src["text_preview"]}"')
+                                    st.divider()
+
+                        st.session_state.chat_history.append(
+                            {"role": "assistant", "content": answer, "sources": sources}
+                        )
+
+                    except requests.HTTPError as exc:
+                        try:
+                            detail = exc.response.json().get("detail", str(exc))
+                        except Exception:
+                            detail = str(exc)
+                        err = f"Request failed: {detail}"
+                        st.error(err)
+                        st.session_state.chat_history.append(
+                            {"role": "assistant", "content": err, "sources": []}
+                        )
+                    except requests.ConnectionError:
+                        err = "Cannot reach backend."
+                        st.error(err)
+                        st.session_state.chat_history.append(
+                            {"role": "assistant", "content": err, "sources": []}
+                        )
+                    except Exception as exc:
+                        err = f"An error occurred: {exc}"
+                        st.error(err)
+                        st.session_state.chat_history.append(
+                            {"role": "assistant", "content": err, "sources": []}
+                        )
+
