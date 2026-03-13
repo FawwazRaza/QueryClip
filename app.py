@@ -3,6 +3,7 @@
 import json
 import os
 from pathlib import Path
+from typing import Optional
 
 import requests
 import streamlit as st
@@ -12,8 +13,6 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
-
-# ─── Backend URL resolution ───────────────────────────────────────────────────
 
 _STATIC_DOMAIN = "https://great-repeatedly-alien.ngrok-free.app"
 _NGROK_HEADERS = {"ngrok-skip-browser-warning": "true"}
@@ -42,8 +41,6 @@ def _resolve_api_url() -> str:
 
 API_URL = _resolve_api_url()
 
-# ─── API helpers ──────────────────────────────────────────────────────────────
-
 
 def _is_backend_available() -> bool:
     try:
@@ -64,21 +61,17 @@ def _process_url(youtube_url: str) -> dict:
     return r.json()
 
 
-def _stream_query_backend(query: str, history: list):
-    """Stream the answer from the /query/stream SSE endpoint.
-
-    Returns a ``(token_generator, sources_holder)`` tuple where:
-    - ``token_generator`` is a generator of raw answer string tokens suitable
-      for ``st.write_stream()``.
-    - ``sources_holder`` is a mutable list; sources are appended to it as a
-      side-effect while the generator is consumed.
-    """
+def _stream_query_backend(query: str, history: list, video_id: Optional[str] = None):
     sources_holder: list = []
 
     def _token_gen():
+        payload = {"query": query, "chat_history": history}
+        if video_id:
+            payload["video_id"] = video_id
+
         with requests.post(
             f"{API_URL}/query/stream",
-            json={"query": query, "chat_history": history},
+            json=payload,
             stream=True,
             timeout=90,
             headers=_NGROK_HEADERS,
@@ -87,11 +80,11 @@ def _stream_query_backend(query: str, history: list):
             for raw_line in resp.iter_lines(decode_unicode=True):
                 if not raw_line.startswith("data: "):
                     continue
-                payload = raw_line[6:]
-                if payload == "[DONE]":
+                data_payload = raw_line[6:]
+                if data_payload == "[DONE]":
                     return
                 try:
-                    event = json.loads(payload)
+                    event = json.loads(data_payload)
                 except json.JSONDecodeError:
                     continue
                 if event.get("type") == "sources":
@@ -104,10 +97,14 @@ def _stream_query_backend(query: str, history: list):
     return _token_gen(), sources_holder
 
 
-def _query_backend(query: str, history: list) -> dict:
+def _query_backend(query: str, history: list, video_id: Optional[str] = None) -> dict:
+    payload = {"query": query, "chat_history": history}
+    if video_id:
+        payload["video_id"] = video_id
+
     r = requests.post(
         f"{API_URL}/query",
-        json={"query": query, "chat_history": history},
+        json=payload,
         timeout=30,
         headers=_NGROK_HEADERS,
     )
@@ -129,7 +126,17 @@ def _clear_all() -> None:
     requests.delete(f"{API_URL}/videos", timeout=10, headers=_NGROK_HEADERS)
 
 
-# ─── Session state ────────────────────────────────────────────────────────────
+def _delete_video(video_id: str) -> bool:
+    try:
+        r = requests.delete(
+            f"{API_URL}/videos/{video_id}",
+            timeout=15,
+            headers=_NGROK_HEADERS,
+        )
+        return r.status_code == 200
+    except Exception:
+        return False
+
 
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
@@ -137,8 +144,10 @@ if "processed_urls" not in st.session_state:
     st.session_state.processed_urls: list = []
 if "backend_ok" not in st.session_state:
     st.session_state.backend_ok = False
-
-# ─── Sidebar ──────────────────────────────────────────────────────────────────
+if "active_video_id" not in st.session_state:
+    st.session_state.active_video_id = None
+if "active_video_title" not in st.session_state:
+    st.session_state.active_video_title = None
 
 with st.sidebar:
     st.title("QueryClip")
@@ -179,7 +188,7 @@ with st.sidebar:
         elif not st.session_state.backend_ok:
             st.error("Backend is offline. Start ngrok_backend.py, then click Check Connection.")
         else:
-            with st.spinner("Extracting and indexing transcripts..."):
+            with st.spinner("Extracting and indexing transcripts... (large videos may take a few minutes)"):
                 try:
                     result = _process_url(youtube_url.strip())
                     chunks = result.get("chunks_stored", 0)
@@ -192,7 +201,7 @@ with st.sidebar:
                         detail = exc.response.json().get("detail", str(exc))
                     except Exception:
                         detail = str(exc)
-                    st.error(f"Processing failed: {detail}")
+                    st.error(f"Transcript extraction failed: {detail}")
                 except requests.ConnectionError:
                     st.error("Cannot reach backend. Is ngrok_backend.py running?")
                 except Exception as exc:
@@ -205,6 +214,8 @@ with st.sidebar:
             _clear_all()
             st.session_state.processed_urls = []
             st.session_state.chat_history = []
+            st.session_state.active_video_id = None
+            st.session_state.active_video_title = None
             st.success("All indexed data cleared.")
             st.rerun()
 
@@ -214,12 +225,57 @@ with st.sidebar:
     if st.session_state.backend_ok:
         videos = _list_videos()
         if videos:
+            video_options = {"All Videos": None}
             for v in videos:
-                with st.expander(v.get("title", "Unknown"), expanded=False):
+                video_options[v.get("title", v.get("video_id", "Unknown"))] = v.get("video_id")
+
+            current_title = st.session_state.active_video_title or "All Videos"
+            if current_title not in video_options:
+                current_title = "All Videos"
+
+            selected_title = st.selectbox(
+                "Query scope",
+                options=list(video_options.keys()),
+                index=list(video_options.keys()).index(current_title),
+                help="Select a video to ask questions about only that video, or choose All Videos to search across everything.",
+            )
+
+            new_video_id = video_options[selected_title]
+            if new_video_id != st.session_state.active_video_id:
+                st.session_state.active_video_id = new_video_id
+                st.session_state.active_video_title = selected_title if selected_title != "All Videos" else None
+
+            if st.session_state.active_video_id:
+                st.info(f"Questions will be answered from: **{selected_title}**")
+            else:
+                st.caption("Searching across all indexed videos.")
+
+            st.divider()
+
+            for v in videos:
+                vid_title = v.get("title", "Unknown")
+                vid_id = v.get("video_id", "")
+                with st.expander(vid_title, expanded=False):
                     if v.get("url"):
                         st.markdown(f"[Open on YouTube]({v['url']})")
                     if v.get("playlist_name"):
                         st.caption(f"Playlist: {v['playlist_name']}")
+                    st.caption(f"ID: `{vid_id}`")
+
+                    if st.button(
+                        "Remove from Index",
+                        key=f"del_{vid_id}",
+                        use_container_width=True,
+                    ):
+                        success = _delete_video(vid_id)
+                        if success:
+                            st.success(f"Removed from index.")
+                            if st.session_state.active_video_id == vid_id:
+                                st.session_state.active_video_id = None
+                                st.session_state.active_video_title = None
+                            st.rerun()
+                        else:
+                            st.error("Failed to remove. Try again.")
         else:
             st.caption("No videos indexed yet.")
     else:
@@ -233,15 +289,17 @@ with st.sidebar:
 
     st.caption(f"Backend: {API_URL}")
 
-# ─── Main area ────────────────────────────────────────────────────────────────
-
 st.title("QueryClip")
-st.caption("Ask questions grounded in the content of any YouTube video or playlist.")
+if st.session_state.active_video_id and st.session_state.active_video_title:
+    st.caption(f"Answering questions from: **{st.session_state.active_video_title}**")
+else:
+    st.caption("Ask questions grounded in the content of any YouTube video or playlist.")
 
 if not st.session_state.chat_history:
     st.info(
         "Add a YouTube URL in the sidebar and click Process. "
-        "Once indexed, ask any question and receive answers drawn strictly from the transcript."
+        "Once indexed, ask any question and receive answers drawn strictly from the transcript. "
+        "Use the 'Query scope' selector to focus on a specific video."
     )
 
 for msg in st.session_state.chat_history:
@@ -277,7 +335,8 @@ if user_input:
                 "**Usage:**\n"
                 "1. Paste a YouTube URL in the sidebar, click Process.\n"
                 "2. Wait for indexing to complete.\n"
-                "3. Ask questions — answers come only from indexed transcripts."
+                "3. Use the 'Query scope' selector to ask about a specific video or all videos.\n"
+                "4. Ask questions — answers come only from indexed transcripts."
             )
 
     else:
@@ -301,9 +360,13 @@ if user_input:
                 {"role": "assistant", "content": err, "sources": []}
             )
         else:
+            active_vid = st.session_state.active_video_id
+
             with st.chat_message("assistant"):
                 try:
-                    gen, sources_holder = _stream_query_backend(stripped, api_history)
+                    gen, sources_holder = _stream_query_backend(
+                        stripped, api_history, video_id=active_vid
+                    )
                     answer = st.write_stream(gen)
 
                     if sources_holder:
@@ -345,4 +408,3 @@ if user_input:
                     st.session_state.chat_history.append(
                         {"role": "assistant", "content": err, "sources": []}
                     )
-

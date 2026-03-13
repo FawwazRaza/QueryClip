@@ -23,11 +23,15 @@ env/
 # Streamlit secrets
 .streamlit/secrets.toml
 
-# Data — transcripts, vector DB, raw videos
+# Data — transcripts, vector DB, raw videos, subtitle cache
 data/chroma_db/
 data/chunks/
+data/cache/
 data/transcriptions.json
 data/videos/
+*.vtt
+*.srt
+*.info.json
 
 # ngrok runtime file
 ngrok_url.txt

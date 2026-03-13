@@ -1,18 +1,32 @@
-"""ChromaDB vector store with sentence-transformers embeddings."""
-
 import hashlib
+import logging
+import os
 from pathlib import Path
 from typing import List, Optional
+
+os.environ.setdefault("TRANSFORMERS_VERBOSITY", "error")
+os.environ.setdefault("TRANSFORMERS_NO_ADVISORY_WARNINGS", "1")
+os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
 
 import chromadb
 from sentence_transformers import SentenceTransformer
 from langchain_core.documents import Document
 
+logger = logging.getLogger(__name__)
+
 _EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 _COLLECTION_NAME = "youtube_transcripts"
 _DB_PATH = Path(__file__).parent.parent / "data" / "chroma_db"
+_UPSERT_BATCH = 200
 
 _encoder: Optional[SentenceTransformer] = None
+
+if not os.getenv("HF_TOKEN"):
+    logger.info(
+        "HF_TOKEN not set — using anonymous HuggingFace Hub access. "
+        "Set HF_TOKEN in .env for higher rate limits."
+    )
 
 
 def _get_encoder() -> SentenceTransformer:
@@ -20,9 +34,6 @@ def _get_encoder() -> SentenceTransformer:
     if _encoder is None:
         _encoder = SentenceTransformer(_EMBEDDING_MODEL)
     return _encoder
-
-
-_UPSERT_BATCH = 200   # ChromaDB recommends ≤ 200 per call
 
 
 def _embed(texts: List[str]) -> List[List[float]]:
@@ -48,16 +59,6 @@ def _get_collection(client: chromadb.PersistentClient):
 
 
 def add_documents(documents: List[Document]) -> int:
-    """Store LangChain Documents in ChromaDB.
-
-    Uses content-based IDs so re-processing the same video is idempotent.
-
-    Args:
-        documents: Chunked Document objects with metadata.
-
-    Returns:
-        Number of chunks stored.
-    """
     if not documents:
         return 0
 
@@ -75,9 +76,9 @@ def add_documents(documents: List[Document]) -> int:
         ).hexdigest()
         for i, doc in enumerate(documents)
     ]
+
     embeddings = _embed(texts)
 
-    # Upsert in safe batches (ChromaDB max ~200 per call)
     for start in range(0, len(documents), _UPSERT_BATCH):
         end = start + _UPSERT_BATCH
         collection.upsert(
@@ -90,31 +91,40 @@ def add_documents(documents: List[Document]) -> int:
     return len(documents)
 
 
-def query_documents(query: str, top_k: int = 4) -> List[dict]:
-    """Retrieve the most relevant document chunks for a query.
-
-    Args:
-        query: User query string.
-        top_k: Maximum number of results to return.
-
-    Returns:
-        List of dicts with keys: text, metadata, similarity.
-    """
+def query_documents(
+    query: str,
+    top_k: int = 4,
+    video_id: Optional[str] = None,
+) -> List[dict]:
     client = _get_client()
     collection = _get_collection(client)
 
-    count = collection.count()
-    if count == 0:
-        return []
+    if video_id:
+        scoped = collection.get(where={"video_id": video_id}, include=[])
+        scoped_count = len(scoped["ids"])
+        if scoped_count == 0:
+            logger.warning("No embeddings found for video_id=%s", video_id)
+            return []
+        actual_k = min(top_k, scoped_count)
+        where_clause = {"video_id": video_id}
+    else:
+        total_count = collection.count()
+        if total_count == 0:
+            return []
+        actual_k = min(top_k, total_count)
+        where_clause = None
 
-    actual_k = min(top_k, count)
     query_embedding = _embed([query])[0]
 
-    results = collection.query(
-        query_embeddings=[query_embedding],
-        n_results=actual_k,
-        include=["documents", "metadatas", "distances"],
-    )
+    query_kwargs = {
+        "query_embeddings": [query_embedding],
+        "n_results": actual_k,
+        "include": ["documents", "metadatas", "distances"],
+    }
+    if where_clause:
+        query_kwargs["where"] = where_clause
+
+    results = collection.query(**query_kwargs)
 
     hits: List[dict] = []
     if results and results.get("ids") and results["ids"][0]:
@@ -131,11 +141,6 @@ def query_documents(query: str, top_k: int = 4) -> List[dict]:
 
 
 def list_indexed_videos() -> List[dict]:
-    """Return unique videos currently stored in ChromaDB.
-
-    Returns:
-        List of dicts with video_id, title, url, playlist_name.
-    """
     client = _get_client()
     collection = _get_collection(client)
 
@@ -158,10 +163,26 @@ def list_indexed_videos() -> List[dict]:
     return list(seen.values())
 
 
+def delete_video_embeddings(video_id: str) -> int:
+    client = _get_client()
+    collection = _get_collection(client)
+
+    existing = collection.get(where={"video_id": video_id}, include=[])
+    ids_to_delete = existing["ids"]
+
+    if not ids_to_delete:
+        logger.info("No embeddings found for video_id=%s — nothing deleted", video_id)
+        return 0
+
+    collection.delete(ids=ids_to_delete)
+    logger.info("Deleted %d embeddings for video_id=%s", len(ids_to_delete), video_id)
+    return len(ids_to_delete)
+
+
 def clear_collection() -> None:
-    """Delete all data from the ChromaDB collection."""
     client = _get_client()
     try:
         client.delete_collection(_COLLECTION_NAME)
+        logger.info("ChromaDB collection '%s' dropped", _COLLECTION_NAME)
     except Exception:
         pass

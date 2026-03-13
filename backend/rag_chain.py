@@ -1,5 +1,3 @@
-"""RAG chain with Groq LLM — streaming, conversation history, and grounded responses."""
-
 import json
 import os
 import re
@@ -14,7 +12,7 @@ load_dotenv()
 
 _GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 _MODEL = "llama-3.3-70b-versatile"
-_MAX_HISTORY_TURNS = 6   # last N messages (user + assistant combined) to include
+_MAX_HISTORY_TURNS = 6
 
 _SYSTEM_PROMPT = """\
 You are QueryClip, a knowledgeable and conversational video assistant. You have access \
@@ -54,12 +52,10 @@ _ROUTER_PROMPT = (
 
 
 def _clean(text: str) -> str:
-    """Remove think-block tags and trim whitespace."""
     return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL | re.IGNORECASE).strip()
 
 
 def _route_query(query: str, client: Groq) -> str:
-    """Classify a query to determine the processing path."""
     try:
         response = client.chat.completions.create(
             model=_MODEL,
@@ -79,7 +75,6 @@ def _route_query(query: str, client: Groq) -> str:
 
 
 def _build_context(chunks: List[dict]) -> str:
-    """Format retrieved chunks into a richly-annotated LLM-ready context block."""
     parts = []
     for i, chunk in enumerate(chunks, 1):
         title = chunk.get("metadata", {}).get("title", "Unknown Video")
@@ -93,10 +88,8 @@ def _build_rag_messages(
     context: str,
     chat_history: Optional[List[dict]],
 ) -> List[dict]:
-    """Build OpenAI-format message list with proper turn-by-turn history."""
     messages: List[dict] = [{"role": "system", "content": _SYSTEM_PROMPT}]
 
-    # Include recent history as proper role-based turns (not serialised text)
     if chat_history:
         for msg in chat_history[-_MAX_HISTORY_TURNS:]:
             role = msg.get("role")
@@ -120,7 +113,6 @@ def _build_greeting_messages(
     query: str,
     chat_history: Optional[List[dict]],
 ) -> List[dict]:
-    """Build messages for the DEFAULT (greeting/capability) route."""
     messages: List[dict] = [{"role": "system", "content": _GREETING_PROMPT}]
     if chat_history:
         for msg in chat_history[-4:]:
@@ -133,7 +125,6 @@ def _build_greeting_messages(
 
 
 def _sources_from_chunks(chunks: List[dict]) -> List[dict]:
-    """Build the sources list returned to the frontend."""
     return [
         {
             "title": c.get("metadata", {}).get("title", "Unknown"),
@@ -146,7 +137,6 @@ def _sources_from_chunks(chunks: List[dict]) -> List[dict]:
 
 
 def _stream_tokens_clean(stream) -> Generator[str, None, None]:
-    """Yield clean text tokens from a Groq stream, stripping <think> blocks."""
     in_think = False
     pending = ""
 
@@ -156,12 +146,11 @@ def _stream_tokens_clean(stream) -> Generator[str, None, None]:
             continue
         pending += token
 
-        # State-machine to filter think blocks without buffering everything
         while pending:
             if in_think:
                 end = pending.find("</think>")
                 if end == -1:
-                    pending = ""  # Still inside block — discard
+                    pending = ""
                     break
                 pending = pending[end + 8:]
                 in_think = False
@@ -177,15 +166,12 @@ def _stream_tokens_clean(stream) -> Generator[str, None, None]:
                 in_think = True
 
 
-# ─── Public API ───────────────────────────────────────────────────────────────
-
-
 def answer_query(
     query: str,
     chat_history: Optional[List[dict]] = None,
     top_k: int = 6,
+    video_id: Optional[str] = None,
 ) -> dict:
-    """Answer a query (non-streaming). Returns {answer, sources, route}."""
     client = Groq(api_key=_GROQ_API_KEY)
     route = _route_query(query, client)
 
@@ -221,10 +207,18 @@ def answer_query(
                 "route": route,
             }
 
-    # BOT route — full RAG pipeline
-    chunks = query_documents(query, top_k=top_k)
+    chunks = query_documents(query, top_k=top_k, video_id=video_id)
 
     if not chunks:
+        if video_id:
+            return {
+                "answer": (
+                    "This video has not been indexed yet or its embeddings were removed. "
+                    "Please re-process the video URL to index its transcript."
+                ),
+                "sources": [],
+                "route": route,
+            }
         return {
             "answer": (
                 "No videos have been indexed yet. "
@@ -271,26 +265,16 @@ def stream_answer_query(
     query: str,
     chat_history: Optional[List[dict]] = None,
     top_k: int = 6,
+    video_id: Optional[str] = None,
 ) -> Generator[str, None, None]:
-    """Stream the answer as JSON-encoded SSE data strings.
-
-    Each yielded string is the body of one ``data:`` SSE line.
-
-    Event types:
-    - ``{"type": "sources", "sources": [...], "route": "BOT"}``  — sent first
-    - ``{"type": "token",   "token":  "..."}``                   — one per LLM chunk
-    - ``{"type": "error",   "message": "..."}``                  — on failure
-    """
     client = Groq(api_key=_GROQ_API_KEY)
     route = _route_query(query, client)
 
-    # ── UNSAFE ────────────────────────────────────────────────────────────────
     if route == "UNSAFE":
         yield json.dumps({"type": "sources", "sources": [], "route": route})
         yield json.dumps({"type": "token", "token": "I'm not able to help with that kind of request."})
         return
 
-    # ── DEFAULT (greeting / capability) ───────────────────────────────────────
     if route == "DEFAULT":
         yield json.dumps({"type": "sources", "sources": [], "route": route})
         messages = _build_greeting_messages(query, chat_history)
@@ -314,23 +298,30 @@ def stream_answer_query(
             })
         return
 
-    # ── BOT (full RAG) ────────────────────────────────────────────────────────
-    chunks = query_documents(query, top_k=top_k)
+    chunks = query_documents(query, top_k=top_k, video_id=video_id)
 
     if not chunks:
         yield json.dumps({"type": "sources", "sources": [], "route": route})
-        yield json.dumps({
-            "type": "token",
-            "token": (
-                "No videos have been indexed yet. "
-                "Paste a YouTube URL in the sidebar and click Process to get started."
-            ),
-        })
+        if video_id:
+            yield json.dumps({
+                "type": "token",
+                "token": (
+                    "This video has not been indexed yet or its embeddings were removed. "
+                    "Please re-process the video URL to index its transcript."
+                ),
+            })
+        else:
+            yield json.dumps({
+                "type": "token",
+                "token": (
+                    "No videos have been indexed yet. "
+                    "Paste a YouTube URL in the sidebar and click Process to get started."
+                ),
+            })
         return
 
     relevant = [c for c in chunks if c.get("similarity", 0) > 0.2]
 
-    # Always emit sources first so the frontend can display them
     yield json.dumps({
         "type": "sources",
         "sources": _sources_from_chunks(relevant),

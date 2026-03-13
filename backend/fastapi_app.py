@@ -1,23 +1,25 @@
-"""FastAPI backend for the QueryClip YouTube RAG system."""
-
 import asyncio
 import json
 import queue
 import sys
 import threading
 from pathlib import Path
-from typing import AsyncGenerator, List
+from typing import AsyncGenerator, List, Optional
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
-# Ensure project root is on the path when running via uvicorn
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from backend.transcript_loader import load_youtube_documents
-from backend.vector_store import add_documents, list_indexed_videos, clear_collection
+from backend.vector_store import (
+    add_documents,
+    list_indexed_videos,
+    clear_collection,
+    delete_video_embeddings,
+)
 from backend.rag_chain import answer_query, stream_answer_query
 
 app = FastAPI(title="QueryClip API", version="1.0.0")
@@ -39,6 +41,7 @@ class QueryRequest(BaseModel):
     query: str = Field(..., min_length=1, max_length=2000)
     chat_history: List[dict] = Field(default_factory=list)
     top_k: int = Field(default=6, ge=1, le=10)
+    video_id: Optional[str] = Field(default=None, description="Filter answers to a specific video")
 
 
 @app.get("/")
@@ -48,7 +51,6 @@ async def health_check():
 
 @app.post("/process")
 async def process_url(request: ProcessRequest):
-    """Extract transcripts from a YouTube URL and store chunks in ChromaDB."""
     url = request.url.strip()
 
     if not url:
@@ -58,7 +60,6 @@ async def process_url(request: ProcessRequest):
         raise HTTPException(status_code=400, detail="URL must be a valid YouTube link.")
 
     try:
-        # Run blocking I/O in a thread so the event loop stays free
         documents = await asyncio.to_thread(load_youtube_documents, url)
         count = await asyncio.to_thread(add_documents, documents)
         return JSONResponse(
@@ -76,7 +77,6 @@ async def process_url(request: ProcessRequest):
 
 @app.post("/query")
 async def query_endpoint(request: QueryRequest):
-    """Query the RAG system with a natural language question."""
     query = request.query.strip()
     if not query:
         raise HTTPException(status_code=400, detail="Query cannot be empty.")
@@ -85,21 +85,38 @@ async def query_endpoint(request: QueryRequest):
         query=query,
         chat_history=request.chat_history,
         top_k=request.top_k,
+        video_id=request.video_id or None,
     )
     return JSONResponse(content=result)
 
 
 @app.get("/videos")
 async def list_videos():
-    """List all videos currently indexed in ChromaDB."""
     videos = list_indexed_videos()
     return JSONResponse(content={"videos": videos, "count": len(videos)})
 
 
+@app.delete("/videos/{video_id}")
+async def delete_video(video_id: str):
+    deleted_count = await asyncio.to_thread(delete_video_embeddings, video_id)
+    if deleted_count == 0:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No embeddings found for video_id '{video_id}'.",
+        )
+    return JSONResponse(
+        content={
+            "success": True,
+            "video_id": video_id,
+            "deleted_chunks": deleted_count,
+            "message": f"Removed {deleted_count} chunks for video '{video_id}'.",
+        }
+    )
+
+
 @app.delete("/videos")
 async def clear_videos():
-    """Remove all indexed data from ChromaDB."""
-    clear_collection()
+    await asyncio.to_thread(clear_collection)
     return JSONResponse(
         content={"success": True, "message": "All indexed videos have been cleared."}
     )
@@ -107,14 +124,6 @@ async def clear_videos():
 
 @app.post("/query/stream")
 async def stream_query_endpoint(request: QueryRequest):
-    """Stream the answer as Server-Sent Events (SSE).
-
-    Events:
-    - ``data: {"type": "sources", "sources": [...], "route": "..."}``
-    - ``data: {"type": "token",   "token":  "..."}``
-    - ``data: {"type": "error",   "message": "..."}``
-    - ``data: [DONE]``
-    """
     query = request.query.strip()
     if not query:
         raise HTTPException(status_code=400, detail="Query cannot be empty.")
@@ -123,12 +132,12 @@ async def stream_query_endpoint(request: QueryRequest):
     _SENTINEL = object()
 
     def _producer() -> None:
-        """Run the sync generator in a background thread, pushing events onto the queue."""
         try:
             for event_json in stream_answer_query(
                 query=query,
                 chat_history=request.chat_history,
                 top_k=request.top_k,
+                video_id=request.video_id or None,
             ):
                 q.put(event_json)
         finally:
