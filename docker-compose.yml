@@ -1,0 +1,59 @@
+version: "3.9"
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: queryclip-app
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      QDRANT_URL: http://qdrant:6333
+      QDRANT_COLLECTION: queryclip_docs
+      REDIS_URL: redis://redis:6379
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+    depends_on:
+      qdrant:
+        condition: service_started
+      redis:
+        condition: service_started
+    restart: unless-stopped
+    networks:
+      - queryclip-net
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: queryclip-qdrant
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    restart: unless-stopped
+    networks:
+      - queryclip-net
+
+  redis:
+    image: redis:7-alpine
+    container_name: queryclip-redis
+    ports:
+      - "6379:6379"
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+    networks:
+      - queryclip-net
+
+volumes:
+  qdrant_data:
+  redis_data:
+
+networks:
+  queryclip-net:
+    driver: bridge
